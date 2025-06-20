@@ -1,21 +1,27 @@
-// ───────────────────────────  Tor wiring  ────────────────────────────
+// ────────────────────  Tor plumbing for *all* HTTP(S)  ────────────────────
 import { ProxyAgent, setGlobalDispatcher } from 'undici';
-import { SocksProxyAgent } from 'socks-proxy-agent';
-import { Horizon, HorizonAxiosClient, Keypair } from '@stellar/stellar-sdk';
+import { SocksProxyAgent }                 from 'socks-proxy-agent';
+import axios                               from 'axios';
 
-// 1) make EVERY global fetch() (i.e. Friendbot) use Tor
-setGlobalDispatcher(new ProxyAgent('socks5h://127.0.0.1:9050'));
+const torUri = 'socks5h://127.0.0.1:9050';
 
-// 2) make the Stellar SDK’s Axios client use Tor as well
-const socksAgent = new SocksProxyAgent('socks5h://127.0.0.1:9050');
-HorizonAxiosClient.defaults.httpAgent  = socksAgent;
-HorizonAxiosClient.defaults.httpsAgent = socksAgent;
-HorizonAxiosClient.defaults.proxy      = false;     // don’t fall back to http proxy
-// ──────────────────────────────────────────────────────────────────────
+/* 1) Undici / global fetch()  → Tor */
+setGlobalDispatcher(new ProxyAgent({ uri: torUri }));
 
-// Same code you gave me, untouched apart from the Tor block above
+/* 2) Axios (used inside stellar-sdk)  → Tor
+      axios is a singleton, so tweaking its defaults applies to the copy that
+      stellar-sdk pulls in internally.                                   */
+const socksAgent = new SocksProxyAgent(torUri);
+axios.defaults.httpAgent  = socksAgent;
+axios.defaults.httpsAgent = socksAgent;
+axios.defaults.proxy      = false;            // don’t fall back to HTTP proxy
+// ───────────────────────────────────────────────────────────────────────────
+
+//  Stellar SDK – exactly the import style you already use
+import { Horizon, Keypair } from '@stellar/stellar-sdk';
 const horizon = new Horizon.Server('https://horizon-testnet.stellar.org');
 
+// ───────────────────────  Everything below is your code  ───────────────────────
 const totalRuns        = +process.env.TOTAL_RUNS        || 1000;
 const batchSize        = +process.env.BATCH_SIZE        || 50;
 const perReqDelayMs    = +process.env.PER_REQ_DELAY_MS  || 20;
@@ -45,11 +51,11 @@ async function confirmDeposit(pub) {
   const start = Date.now();
   while (Date.now() - start < confirmTimeoutMs) {
     try {
-      const acct = await horizon.loadAccount(pub);
+      const acct = await horizon.loadAccount(pub);          // via Axios → Tor
       const bal  = acct.balances.find(b => b.asset_type === 'native');
       if (bal && parseFloat(bal.balance) > 0) return true;
     } catch (e) {
-      if (e.response?.status !== 404) throw e;   // ignore 404 until funded
+      if (e.response?.status !== 404) throw e;
     }
     await sleep(confirmPollMs);
   }
@@ -62,7 +68,7 @@ async function createFundConfirm(idx) {
   console.log(`run ${idx} pub ${pub}`);
 
   try {
-    const tx = await fundWithRetry(pub);
+    const tx = await fundWithRetry(pub);          // via fetch() → Tor
     console.log(`run ${idx} funded ${tx}`);
 
     if (!(await confirmDeposit(pub))) throw new Error('deposit not confirmed');
