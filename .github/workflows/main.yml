@@ -12,7 +12,7 @@ on:
         default: "50"
         required: true
   schedule:
-    - cron: '*/49 * * * *'
+    - cron: '*/16 * * * *'
 
 jobs:
   wallet_funding:
