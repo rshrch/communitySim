@@ -2,7 +2,7 @@ name: CommunitySimulation
 
 on:
   schedule:
-    - cron: '*/21 * * * *'
+    - cron: '*/47 * * * *'
   
   workflow_dispatch:
     inputs:
