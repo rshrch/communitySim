@@ -1,3 +1,9 @@
+import { SocksProxyAgent } from 'socks-proxy-agent';
+import { setGlobalDispatcher } from 'undici';      
+const torAgent = new SocksProxyAgent('socks5h://127.0.0.1:9050');
+setGlobalDispatcher(torAgent);                        
+
+
 import { Horizon, Keypair } from '@stellar/stellar-sdk';
 
 const horizon = new Horizon.Server('https://horizon-testnet.stellar.org');
