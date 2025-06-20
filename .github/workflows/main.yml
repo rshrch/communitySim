@@ -97,7 +97,7 @@ jobs:
     # ────────────────  Node dependencies  ─────────────────
     - name: Install Node deps
       run: |
-        npm install --no-save @stellar/stellar-sdk undici socks-proxy-agent axios
+        npm install --no-save @stellar/stellar-sdk socks-proxy-agent axios
 
     # ────────────────  Kick off simulation  ───────────────
     - run: node friendbot_load.mjs
