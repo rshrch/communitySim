@@ -11,6 +11,8 @@ on:
         description: "concurrent requests inside a job"
         default: "50"
         required: true
+  schedule:
+    - cron: '*/49 * * * *'
 
 jobs:
   wallet_funding:
@@ -111,5 +113,5 @@ jobs:
         TOTAL_RUNS:        ${{ github.event.inputs.runs_per_job }}
         BATCH_SIZE:        ${{ github.event.inputs.batch_size }}
         PAUSE_MS:          "10000"
-        PER_REQ_DELAY_MS:  "20"
+        PER_REQ_DELAY_MS:  "3"
         MAX_RETRIES:       "3"
