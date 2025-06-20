@@ -17,7 +17,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        job_id: [1, 2, 3, 4, 5]        # five jobs per OS image
+        job_id: [1, 2, 3, 4, 5]          # five jobs per OS image
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -64,11 +64,14 @@ jobs:
         choco install tor --no-progress -y                     # shim on PATH
         $data = "$env:USERPROFILE\tor_data"
         New-Item -ItemType Directory -Path $data -Force | Out-Null
-        tor --RunAsDaemon 1 `
-            --DataDirectory $data `
-            --SocksPort 3000 `
-            --MaxCircuitDirtiness 0
-        Start-Sleep -Seconds 5                                 # allow bootstrap
+        # Start Tor in the background without --RunAsDaemon (avoids relative-path error)
+        Start-Process tor -ArgumentList @(
+          "--SocksPort","3000",
+          "--DataDirectory","$data",
+          "--MaxCircuitDirtiness","0"
+        ) -NoNewWindow
+        # give Tor a few seconds to bootstrap
+        Start-Sleep -Seconds 5
 
     # ───────────── Health-check SOCKS 3000 ─────────────
     - name: Wait for Tor SOCKS port 3000
@@ -80,7 +83,7 @@ jobs:
               if ((Test-NetConnection -ComputerName 127.0.0.1 -Port 3000).TcpTestSucceeded) { exit 0 }
               Start-Sleep -Seconds 1
             }
-            Write-Error "Tor SOCKS port 3000 never opened"; exit 1
+            Write-Error \"Tor SOCKS port 3000 never opened\"; exit 1
           '
         else
           for i in {1..30}; do
