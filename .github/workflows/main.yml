@@ -69,8 +69,7 @@ jobs:
         exit 1
 
     # ─────────────────────────────  Node dependencies  ─────────────────────────────
-    - run: npm install
-    - run: npm install @stellar/stellar-sdk socks-proxy-agent undici
+    - run: npm install --no-save @stellar/stellar-sdk socks-proxy-agent undici
 
     # ─────────────────────────────  Kick off simulation  ───────────────────────────
     - run: node friendbot_load.mjs
