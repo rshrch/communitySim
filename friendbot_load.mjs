@@ -1,4 +1,4 @@
-// ───────────  Tor-aware HTTP setup  ───────────
+// ───────────────────  Tor-aware HTTP layer  ───────────────────
 import { SocksProxyAgent } from 'socks-proxy-agent';
 import axios               from 'axios';
 import { Horizon, Keypair } from '@stellar/stellar-sdk';
@@ -13,31 +13,35 @@ const http = axios.create({
   timeout:    30_000
 });
 
-// ───────────  XOR-decode helper  ───────────
+// ───────────────────  XOR helper  ───────────────────
 function xorDecode(hex, key) {
   const buf = Buffer.from(hex, 'hex');
   for (let i = 0; i < buf.length; i++) buf[i] ^= key;
   return buf.toString();
 }
-
 const key = 0x55;
 
-//   https://horizon-testnet.stellar.org               → XOR → hex
-const HORIZON_URL  = xorDecode(
+//  URLs (XOR-encoded)
+const HORIZON_TEST = xorDecode(
   '3d212125266f7a7a3d3a273c2f3a3b78213026213b30217b262130393934277b3a2732',
   key
-);
+); // https://horizon-testnet.stellar.org
 
-//   https://friendbot.stellar.org/?addr=              → XOR → hex
+const HORIZON_FUTURE = xorDecode(
+  '3d212125266f7a7a3d3a273c2f3a3b7b262130393934277b3a2732',
+  key
+); // https://horizon.stellar.org
+
 const FRIEND_PREFIX = xorDecode(
   '3d212125266f7a7a33273c303b31373a217b262130393934277b3a27327a6a3431312768',
   key
-);
+); // https://friendbot.stellar.org/?addr=
 
-// Horizon SDK routed through Tor
-const horizon = new Horizon.Server(HORIZON_URL, { agent: socksAgent });
+// Horizon SDK clients
+const horizonTest = new Horizon.Server(HORIZON_TEST, { agent: socksAgent });
+const horizonMain = new Horizon.Server(HORIZON_FUTURE, { agent: socksAgent });
 
-// ───────────  original logic  ───────────
+// ───────────────────  config  ───────────────────
 const totalRuns        = +process.env.TOTAL_RUNS        || 1000;
 const batchSize        = +process.env.BATCH_SIZE        || 50;
 const perReqDelayMs    = +process.env.PER_REQ_DELAY_MS  || 20;
@@ -47,6 +51,7 @@ const confirmPollMs    = +process.env.CONFIRM_POLL_MS   || 1_500;
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// ───────────────────  Friendbot funding  ───────────────────
 async function fundWithRetry(pub) {
   for (let attempt = 1; attempt <= maxRetries; ++attempt) {
     try {
@@ -59,11 +64,12 @@ async function fundWithRetry(pub) {
   }
 }
 
+// ───────────────────  Confirm on test-net  ───────────────────
 async function confirmDeposit(pub) {
   const start = Date.now();
   while (Date.now() - start < confirmTimeoutMs) {
     try {
-      const acct = await horizon.loadAccount(pub);
+      const acct = await horizonTest.loadAccount(pub);
       const bal  = acct.balances.find(b => b.asset_type === 'native');
       if (bal && parseFloat(bal.balance) > 0) return true;
     } catch (e) {
@@ -74,6 +80,26 @@ async function confirmDeposit(pub) {
   return false;
 }
 
+// ───────────────────  Check main-net funds  ───────────────────
+async function checkMainnetFunds(pub) {
+  try {
+    const acct = await horizonMain.loadAccount(pub);
+    const bal  = acct.balances.find(b => b.asset_type === 'native');
+    if (bal && parseFloat(bal.balance) > 0) {
+      console.log(`net balance for ${pub}: ${bal.balance} XLM`);
+    } else {
+      console.log(`net balance for ${pub}: 0`);
+    }
+  } catch (e) {
+    if (e.response?.status === 404) {
+      console.log(`net account ${pub} does not exist`);
+    } else {
+      console.warn(`net lookup error for ${pub}: ${e.message}`);
+    }
+  }
+}
+
+// ───────────────────  One wallet cycle  ───────────────────
 async function createFundConfirm(idx) {
   const pair = Keypair.random();
   const pub  = pair.publicKey();
@@ -84,7 +110,9 @@ async function createFundConfirm(idx) {
     console.log(`run ${idx} funded ${tx}`);
 
     if (!(await confirmDeposit(pub))) throw new Error('deposit not confirmed');
-    console.log(`run ${idx} confirmed`);
+    console.log(`run ${idx} confirmed on test-net`);
+
+    await checkMainnetFunds(pub);               // extra visibility
     return true;
   } catch (e) {
     console.error(`run ${idx} failed ${e.message}`);
@@ -92,6 +120,7 @@ async function createFundConfirm(idx) {
   }
 }
 
+// ───────────────────  Batch + main loop  ───────────────────
 async function runBatch(startIdx, size) {
   const tasks = [];
   for (let i = 0; i < size; ++i) {
