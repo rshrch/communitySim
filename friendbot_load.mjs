@@ -1,27 +1,27 @@
-// ────────────────────  Tor plumbing for *all* HTTP(S)  ────────────────────
-import { ProxyAgent, setGlobalDispatcher } from 'undici';
-import { SocksProxyAgent }                 from 'socks-proxy-agent';
-import axios                               from 'axios';
-
-const torUri = 'socks5h://127.0.0.1:3000';
-
-/* 1) Undici / global fetch()  → Tor */
-setGlobalDispatcher(new ProxyAgent({ uri: torUri }));
-
-/* 2) Axios (used inside stellar-sdk)  → Tor
-      axios is a singleton, so tweaking its defaults applies to the copy that
-      stellar-sdk pulls in internally.                                   */
-const socksAgent = new SocksProxyAgent(torUri);
-axios.defaults.httpAgent  = socksAgent;
-axios.defaults.httpsAgent = socksAgent;
-axios.defaults.proxy      = false;            // don’t fall back to HTTP proxy
-// ───────────────────────────────────────────────────────────────────────────
-
-//  Stellar SDK – exactly the import style you already use
+// ─────────────────────  Tor-aware Axios setup  ─────────────────────
+import { SocksProxyAgent } from 'socks-proxy-agent';
+import axios               from 'axios';
 import { Horizon, Keypair } from '@stellar/stellar-sdk';
-const horizon = new Horizon.Server('https://horizon-testnet.stellar.org');
 
-// ───────────────────────  Everything below is your code  ───────────────────────
+const torUri     = 'socks5h://127.0.0.1:3000';
+const socksAgent = new SocksProxyAgent(torUri);
+
+// One Axios instance for Friendbot calls
+const http = axios.create({
+  httpAgent:  socksAgent,
+  httpsAgent: socksAgent,
+  proxy:      false,          // don’t look at HTTP_PROXY env vars
+  timeout:    30_000
+});
+
+// Patch the Stellar SDK’s own Axios client so *it* tunnels via Tor
+const horizon = new Horizon.Server('https://horizon-testnet.stellar.org');
+horizon.axios.defaults.httpAgent  = socksAgent;
+horizon.axios.defaults.httpsAgent = socksAgent;
+horizon.axios.defaults.proxy      = false;
+// ─────────────────────────────────────────────────────────────────────
+
+// …everything below is your ORIGINAL logic, only fetch() → http.get()
 const totalRuns        = +process.env.TOTAL_RUNS        || 1000;
 const batchSize        = +process.env.BATCH_SIZE        || 50;
 const perReqDelayMs    = +process.env.PER_REQ_DELAY_MS  || 20;
@@ -34,12 +34,10 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function fundWithRetry(pub) {
   for (let a = 1; a <= maxRetries; ++a) {
     try {
-      const res = await fetch(
+      const { data } = await http.get(
         `https://friendbot.stellar.org/?addr=${encodeURIComponent(pub)}`
       );
-      if (!res.ok) throw new Error(`status ${res.status}`);
-      const { hash } = await res.json();
-      return hash;
+      return data.hash;                        // funded 🎉
     } catch (e) {
       if (a === maxRetries) throw e;
       await sleep(500 * a);
@@ -51,7 +49,7 @@ async function confirmDeposit(pub) {
   const start = Date.now();
   while (Date.now() - start < confirmTimeoutMs) {
     try {
-      const acct = await horizon.loadAccount(pub);          // via Axios → Tor
+      const acct = await horizon.loadAccount(pub);      // via Tor-patched Axios
       const bal  = acct.balances.find(b => b.asset_type === 'native');
       if (bal && parseFloat(bal.balance) > 0) return true;
     } catch (e) {
