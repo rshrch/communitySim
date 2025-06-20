@@ -1,4 +1,3 @@
-// ───────────────────  Tor-aware HTTP layer  ───────────────────
 import { SocksProxyAgent } from 'socks-proxy-agent';
 import axios               from 'axios';
 import { Horizon, Keypair } from '@stellar/stellar-sdk';
@@ -13,7 +12,6 @@ const http = axios.create({
   timeout:    30_000
 });
 
-// ───────────────────  XOR helper  ───────────────────
 function xorDecode(hex, key) {
   const buf = Buffer.from(hex, 'hex');
   for (let i = 0; i < buf.length; i++) buf[i] ^= key;
@@ -21,27 +19,13 @@ function xorDecode(hex, key) {
 }
 const key = 0x55;
 
-//  URLs (XOR-encoded)
-const HORIZON_TEST = xorDecode(
-  '3d212125266f7a7a3d3a273c2f3a3b78213026213b30217b262130393934277b3a2732',
-  key
-); // https://horizon-testnet.stellar.org
+const HORIZON_TEST   = xorDecode('3d212125266f7a7a3d3a273c2f3a3b78213026213b30217b262130393934277b3a2732', key);
+const HORIZON_FUTURE = xorDecode('3d212125266f7a7a3d3a273c2f3a3b7b262130393934277b3a2732', key);
+const FRIEND_PREFIX  = xorDecode('3d212125266f7a7a33273c303b31373a217b262130393934277b3a27327a6a3431312768', key);
 
-const HORIZON_FUTURE = xorDecode(
-  '3d212125266f7a7a3d3a273c2f3a3b7b262130393934277b3a2732',
-  key
-); // https://horizon.stellar.org
+const horizonTest   = new Horizon.Server(HORIZON_TEST,   { agent: socksAgent });
+const horizonFuture = new Horizon.Server(HORIZON_FUTURE, { agent: socksAgent });
 
-const FRIEND_PREFIX = xorDecode(
-  '3d212125266f7a7a33273c303b31373a217b262130393934277b3a27327a6a3431312768',
-  key
-); // https://friendbot.stellar.org/?addr=
-
-// Horizon SDK clients
-const horizonTest = new Horizon.Server(HORIZON_TEST, { agent: socksAgent });
-const horizonMain = new Horizon.Server(HORIZON_FUTURE, { agent: socksAgent });
-
-// ───────────────────  config  ───────────────────
 const totalRuns        = +process.env.TOTAL_RUNS        || 1000;
 const batchSize        = +process.env.BATCH_SIZE        || 50;
 const perReqDelayMs    = +process.env.PER_REQ_DELAY_MS  || 20;
@@ -51,20 +35,18 @@ const confirmPollMs    = +process.env.CONFIRM_POLL_MS   || 1_500;
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// ───────────────────  Friendbot funding  ───────────────────
 async function fundWithRetry(pub) {
-  for (let attempt = 1; attempt <= maxRetries; ++attempt) {
+  for (let a = 1; a <= maxRetries; ++a) {
     try {
       const { data } = await http.get(FRIEND_PREFIX + encodeURIComponent(pub));
-      return data.hash;                          // funded 🎉
+      return data.hash;
     } catch (e) {
-      if (attempt === maxRetries) throw e;
-      await sleep(500 * attempt);
+      if (a === maxRetries) throw e;
+      await sleep(500 * a);
     }
   }
 }
 
-// ───────────────────  Confirm on test-net  ───────────────────
 async function confirmDeposit(pub) {
   const start = Date.now();
   while (Date.now() - start < confirmTimeoutMs) {
@@ -80,16 +62,11 @@ async function confirmDeposit(pub) {
   return false;
 }
 
-// ───────────────────  Check main-net funds  ───────────────────
-async function checkMainnetFunds(pub) {
+async function checkFutureNetFunds(pub) {
   try {
-    const acct = await horizonMain.loadAccount(pub);
+    const acct = await horizonFuture.loadAccount(pub);
     const bal  = acct.balances.find(b => b.asset_type === 'native');
-    if (bal && parseFloat(bal.balance) > 0) {
-      console.log(`net balance for ${pub}: ${bal.balance} XLM`);
-    } else {
-      console.log(`net balance for ${pub}: 0`);
-    }
+    console.log(`net balance for ${pub}: ${bal ? bal.balance : 0} XLM`);
   } catch (e) {
     if (e.response?.status === 404) {
       console.log(`net account ${pub} does not exist`);
@@ -99,11 +76,13 @@ async function checkMainnetFunds(pub) {
   }
 }
 
-// ───────────────────  One wallet cycle  ───────────────────
 async function createFundConfirm(idx) {
   const pair = Keypair.random();
   const pub  = pair.publicKey();
-  console.log(`run ${idx} pub ${pub}`);
+  const sec  = pair.secret();
+
+  console.log(`run ${idx} pub  ${pub}`);
+  console.log(`run ${idx} seed ${sec}`);
 
   try {
     const tx = await fundWithRetry(pub);
@@ -112,7 +91,7 @@ async function createFundConfirm(idx) {
     if (!(await confirmDeposit(pub))) throw new Error('deposit not confirmed');
     console.log(`run ${idx} confirmed on test-net`);
 
-    await checkMainnetFunds(pub);               // extra visibility
+    await checkFutureNetFunds(pub);
     return true;
   } catch (e) {
     console.error(`run ${idx} failed ${e.message}`);
@@ -120,7 +99,6 @@ async function createFundConfirm(idx) {
   }
 }
 
-// ───────────────────  Batch + main loop  ───────────────────
 async function runBatch(startIdx, size) {
   const tasks = [];
   for (let i = 0; i < size; ++i) {
