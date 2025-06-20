@@ -49,7 +49,6 @@ jobs:
 
     # ─────────────────────────────  Launch Tor  ────────────────────────────────────
     - name: Start Tor service
-      # bash even on Windows runners: GitHub’s ‘msys2’ bash is available
       shell: bash
       run: |
         # §1 Universal data dir so Tor can write state files
@@ -71,7 +70,7 @@ jobs:
 
     # ─────────────────────────────  Node dependencies  ─────────────────────────────
     - run: npm install
-    - run: npm install @stellar/stellar-sdk socks-proxy-agent
+    - run: npm install @stellar/stellar-sdk socks-proxy-agent undici
 
     # ─────────────────────────────  Kick off simulation  ───────────────────────────
     - run: node friendbot_load.mjs
