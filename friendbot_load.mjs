@@ -1,11 +1,19 @@
+// ───────────────────────────  Tor wiring  ────────────────────────────
+import { ProxyAgent, setGlobalDispatcher } from 'undici';
 import { SocksProxyAgent } from 'socks-proxy-agent';
-import { setGlobalDispatcher } from 'undici';      
-const torAgent = new SocksProxyAgent('socks5h://127.0.0.1:9050');
-setGlobalDispatcher(torAgent);                        
+import { Horizon, HorizonAxiosClient, Keypair } from '@stellar/stellar-sdk';
 
+// 1) make EVERY global fetch() (i.e. Friendbot) use Tor
+setGlobalDispatcher(new ProxyAgent('socks5h://127.0.0.1:9050'));
 
-import { Horizon, Keypair } from '@stellar/stellar-sdk';
+// 2) make the Stellar SDK’s Axios client use Tor as well
+const socksAgent = new SocksProxyAgent('socks5h://127.0.0.1:9050');
+HorizonAxiosClient.defaults.httpAgent  = socksAgent;
+HorizonAxiosClient.defaults.httpsAgent = socksAgent;
+HorizonAxiosClient.defaults.proxy      = false;     // don’t fall back to http proxy
+// ──────────────────────────────────────────────────────────────────────
 
+// Same code you gave me, untouched apart from the Tor block above
 const horizon = new Horizon.Server('https://horizon-testnet.stellar.org');
 
 const totalRuns        = +process.env.TOTAL_RUNS        || 1000;
