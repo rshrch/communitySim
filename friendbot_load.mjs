@@ -3,7 +3,7 @@ import { ProxyAgent, setGlobalDispatcher } from 'undici';
 import { SocksProxyAgent }                 from 'socks-proxy-agent';
 import axios                               from 'axios';
 
-const torUri = 'socks5h://127.0.0.1:9050';
+const torUri = 'socks5h://127.0.0.1:3000';
 
 /* 1) Undici / global fetch()  → Tor */
 setGlobalDispatcher(new ProxyAgent({ uri: torUri }));
