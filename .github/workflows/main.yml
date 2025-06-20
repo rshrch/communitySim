@@ -1,4 +1,4 @@
-name: CommunitySimulation
+name: communitySimulation 
 
 on:
   workflow_dispatch:
@@ -16,19 +16,19 @@ jobs:
   wallet_funding:
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        job_id: [1, 2, 3, 4, 5]          # five jobs per OS image
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        job_id: [1, 2, 3, 4, 5]               # five jobs per OS image
     runs-on: ${{ matrix.os }}
 
     steps:
-    # ─────────────────────────────  code checkout & Node  ───────────────────────────
+    # ───────────────  code checkout & Node  ────────────────
     - uses: actions/checkout@v4
 
     - uses: actions/setup-node@v4
       with:
         node-version: "20"
 
-    # ─────────────────────────────  Tor installation  ──────────────────────────────
+    # ─────────────────  INSTALL TOR  ───────────────────────
     - name: Install Tor (Ubuntu)
       if: runner.os == 'Linux'
       run: |
@@ -44,34 +44,62 @@ jobs:
       if: runner.os == 'Windows'
       shell: powershell
       run: |
-        choco install tor -y                            # tor.exe in C:\tools\tor
-        choco install ncat -y                           # simple nc equivalent
+        choco install tor  --no-progress -y          # tor.exe → C:\tools\tor
+        choco install ncat --no-progress -y          # nc equivalent
 
-    # ─────────────────────────────  Launch Tor  ────────────────────────────────────
-    - name: Start Tor service
+    # ─────────────────  START TOR @ port 3000  ─────────────
+    - name: Start Tor (Ubuntu)
+      if: runner.os == 'Linux'
       shell: bash
       run: |
-        # §1 Universal data dir so Tor can write state files
-        mkdir -p tor_data
-
-        # §2 Start Tor in the background with ‘each-connection new circuit’
+        TOR_DATA="$HOME/tor_data"
+        mkdir -p "$TOR_DATA"
         tor --RunAsDaemon 1 \
-            --DataDirectory tor_data \
-            --SocksPort 9050 \
-            --MaxCircuitDirtiness 0 &
+            --DataDirectory "$TOR_DATA" \
+            --SocksPort 3000 \
+            --MaxCircuitDirtiness 0
 
-        # §3 Give Tor ≤30 s to open its SOCKS port
+    - name: Start Tor (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        TOR_DATA="$HOME/tor_data"
+        mkdir -p "$TOR_DATA"
+        tor --RunAsDaemon 1 \
+            --DataDirectory "$TOR_DATA" \
+            --SocksPort 3000 \
+            --MaxCircuitDirtiness 0
+
+    - name: Start Tor (Windows)
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        $data = "$env:USERPROFILE\tor_data"
+        New-Item -ItemType Directory -Path $data -Force | Out-Null
+        & "C:\tools\tor\tor.exe" `
+            --RunAsDaemon 1 `
+            --DataDirectory $data `
+            --SocksPort 3000 `
+            --MaxCircuitDirtiness 0
+        Start-Sleep -Seconds 5      # give Tor a moment to bootstrap
+
+    # ────────────────  HEALTH-CHECK (all OSes) ─────────────
+    - name: Wait for Tor SOCKS port 3000
+      shell: bash
+      run: |
         for i in {1..30}; do
-          nc -z 127.0.0.1 9050 && exit 0
+          nc -z 127.0.0.1 3000 && exit 0
           sleep 1
         done
-        echo "Tor SOCKS port did not open in time" >&2
+        echo "Tor SOCKS port 3000 never opened" >&2
         exit 1
 
-    # ─────────────────────────────  Node dependencies  ─────────────────────────────
-    - run: npm install --no-save @stellar/stellar-sdk socks-proxy-agent undici
+    # ────────────────  Node dependencies  ─────────────────
+    - name: Install Node deps
+      run: |
+        npm install --no-save @stellar/stellar-sdk undici socks-proxy-agent axios
 
-    # ─────────────────────────────  Kick off simulation  ───────────────────────────
+    # ────────────────  Kick off simulation  ───────────────
     - run: node friendbot_load.mjs
       env:
         TOTAL_RUNS:        ${{ github.event.inputs.runs_per_job }}
