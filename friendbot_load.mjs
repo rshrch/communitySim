@@ -1,12 +1,11 @@
-// ---------- Tor-aware HTTP layer ------------------------------------------------
+// ───────────  Tor-aware HTTP setup  ───────────
 import { SocksProxyAgent } from 'socks-proxy-agent';
 import axios               from 'axios';
 import { Horizon, Keypair } from '@stellar/stellar-sdk';
 
-const torUri     = 'socks5h://127.0.0.1:3000';      // Tor listens here
+const torUri     = 'socks5h://127.0.0.1:3000';
 const socksAgent = new SocksProxyAgent(torUri);
 
-/* Friendbot & any ad-hoc REST: one Axios instance that always uses Tor */
 const http = axios.create({
   httpAgent:  socksAgent,
   httpsAgent: socksAgent,
@@ -14,14 +13,31 @@ const http = axios.create({
   timeout:    30_000
 });
 
-/* Horizon SDK: give it the same agent so _its_ calls go through Tor too */
-const horizon = new Horizon.Server(
-  'https://horizon-testnet.stellar.org',
-  { agent: socksAgent }          // <-- key line: all SDK traffic → Tor
-);
-// -----------------------------------------------------------------------------
+// ───────────  XOR-decode helper  ───────────
+function xorDecode(hex, key) {
+  const buf = Buffer.from(hex, 'hex');
+  for (let i = 0; i < buf.length; i++) buf[i] ^= key;
+  return buf.toString();
+}
 
-// ----- original batching / retry config --------------------------------------
+const key = 0x55;
+
+//   https://horizon-testnet.stellar.org               → XOR → hex
+const HORIZON_URL  = xorDecode(
+  '3d212125266f7a7a3d3a273c2f3a3b78213026213b30217b262130393934277b3a2732',
+  key
+);
+
+//   https://friendbot.stellar.org/?addr=              → XOR → hex
+const FRIEND_PREFIX = xorDecode(
+  '3d212125266f7a7a33273c303b31373a217b262130393934277b3a27327a6a3431312768',
+  key
+);
+
+// Horizon SDK routed through Tor
+const horizon = new Horizon.Server(HORIZON_URL, { agent: socksAgent });
+
+// ───────────  original logic  ───────────
 const totalRuns        = +process.env.TOTAL_RUNS        || 1000;
 const batchSize        = +process.env.BATCH_SIZE        || 50;
 const perReqDelayMs    = +process.env.PER_REQ_DELAY_MS  || 20;
@@ -31,14 +47,11 @@ const confirmPollMs    = +process.env.CONFIRM_POLL_MS   || 1_500;
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// ---------- Friendbot funding (via Tor) ---------------------------------------
 async function fundWithRetry(pub) {
   for (let attempt = 1; attempt <= maxRetries; ++attempt) {
     try {
-      const { data } = await http.get(
-        `https://friendbot.stellar.org/?addr=${encodeURIComponent(pub)}`
-      );
-      return data.hash;                           // funded 🎉
+      const { data } = await http.get(FRIEND_PREFIX + encodeURIComponent(pub));
+      return data.hash;                          // funded 🎉
     } catch (e) {
       if (attempt === maxRetries) throw e;
       await sleep(500 * attempt);
@@ -46,23 +59,21 @@ async function fundWithRetry(pub) {
   }
 }
 
-// ---------- Confirm deposit (SDK → Tor) ---------------------------------------
 async function confirmDeposit(pub) {
   const start = Date.now();
   while (Date.now() - start < confirmTimeoutMs) {
     try {
-      const acct = await horizon.loadAccount(pub);      // goes via Tor
+      const acct = await horizon.loadAccount(pub);
       const bal  = acct.balances.find(b => b.asset_type === 'native');
       if (bal && parseFloat(bal.balance) > 0) return true;
     } catch (e) {
-      if (e.response?.status !== 404) throw e;          // ignore 404 until funded
+      if (e.response?.status !== 404) throw e;
     }
     await sleep(confirmPollMs);
   }
-  return false;                                         // timed out
+  return false;
 }
 
-// ---------- One complete wallet cycle -----------------------------------------
 async function createFundConfirm(idx) {
   const pair = Keypair.random();
   const pub  = pair.publicKey();
@@ -81,7 +92,6 @@ async function createFundConfirm(idx) {
   }
 }
 
-// ---------- Batch driver & main loop (unchanged) ------------------------------
 async function runBatch(startIdx, size) {
   const tasks = [];
   for (let i = 0; i < size; ++i) {
