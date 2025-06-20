@@ -1,0 +1,37 @@
+name: CommunitySimulation
+
+on:
+  workflow_dispatch:
+    inputs:
+      runs_per_job:
+        description: wallets each job will fund
+        default: "1000"
+        required: true
+      batch_size:
+        description: concurrent requests inside a job
+        default: "50"
+        required: true
+
+jobs:
+  wallet_funding:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        job_id: [1, 2, 3, 4, 5] # five jobs on each operating-system image
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - run: npm install @stellar/stellar-sdk
+      - run: node friendbot_load.mjs
+        env:
+          TOTAL_RUNS: ${{ github.event.inputs.runs_per_job }}
+          BATCH_SIZE: ${{ github.event.inputs.batch_size }}
+          PAUSE_MS: "10000"
+          PER_REQ_DELAY_MS: "20"
+          MAX_RETRIES: "3"
