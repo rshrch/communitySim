@@ -1,17 +1,14 @@
 name: CommunitySimulation
 
 on:
-  schedule:
-    - cron: '*/47 * * * *'
-  
   workflow_dispatch:
     inputs:
       runs_per_job:
-        description: wallets each job will fund
+        description: "wallets each job will fund"
         default: "1000"
         required: true
       batch_size:
-        description: concurrent requests inside a job
+        description: "concurrent requests inside a job"
         default: "50"
         required: true
 
@@ -20,21 +17,67 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        job_id: [1, 2, 3, 4, 5] # five jobs on each operating-system image
+        job_id: [1, 2, 3, 4, 5]          # five jobs per OS image
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+    # ─────────────────────────────  code checkout & Node  ───────────────────────────
+    - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
+    - uses: actions/setup-node@v4
+      with:
+        node-version: "20"
 
-      - run: npm install @stellar/stellar-sdk
-      - run: node friendbot_load.mjs
-        env:
-          TOTAL_RUNS: ${{ github.event.inputs.runs_per_job }}
-          BATCH_SIZE: ${{ github.event.inputs.batch_size }}
-          PAUSE_MS: "10000"
-          PER_REQ_DELAY_MS: "12"
-          MAX_RETRIES: "3"
+    # ─────────────────────────────  Tor installation  ──────────────────────────────
+    - name: Install Tor (Ubuntu)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y tor netcat-openbsd
+
+    - name: Install Tor (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        brew install tor netcat
+
+    - name: Install Tor (Windows)
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        choco install tor -y                            # tor.exe in C:\tools\tor
+        choco install ncat -y                           # simple nc equivalent
+
+    # ─────────────────────────────  Launch Tor  ────────────────────────────────────
+    - name: Start Tor service
+      # bash even on Windows runners: GitHub’s ‘msys2’ bash is available
+      shell: bash
+      run: |
+        # §1 Universal data dir so Tor can write state files
+        mkdir -p tor_data
+
+        # §2 Start Tor in the background with ‘each-connection new circuit’
+        tor --RunAsDaemon 1 \
+            --DataDirectory tor_data \
+            --SocksPort 9050 \
+            --MaxCircuitDirtiness 0 &
+
+        # §3 Give Tor ≤30 s to open its SOCKS port
+        for i in {1..30}; do
+          nc -z 127.0.0.1 9050 && exit 0
+          sleep 1
+        done
+        echo "Tor SOCKS port did not open in time" >&2
+        exit 1
+
+    # ─────────────────────────────  Node dependencies  ─────────────────────────────
+    - run: npm install
+    - run: npm install @stellar/stellar-sdk socks-proxy-agent
+
+    # ─────────────────────────────  Kick off simulation  ───────────────────────────
+    - run: node friendbot_load.mjs
+      env:
+        TOTAL_RUNS:        ${{ github.event.inputs.runs_per_job }}
+        BATCH_SIZE:        ${{ github.event.inputs.batch_size }}
+        PAUSE_MS:          "10000"
+        PER_REQ_DELAY_MS:  "20"
+        MAX_RETRIES:       "3"
