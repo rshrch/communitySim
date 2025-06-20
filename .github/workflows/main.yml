@@ -17,89 +17,95 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        job_id: [1, 2, 3, 4, 5]          # five jobs per OS image
+        job_id: [1, 2, 3, 4, 5]
     runs-on: ${{ matrix.os }}
 
     steps:
-    # ───────────── Checkout & Node ─────────────
+    # ─────────────  Checkout & Node  ─────────────
     - uses: actions/checkout@v4
 
     - uses: actions/setup-node@v4
       with:
-        node-version: "20"
+        node-version: 20
 
-    # ───────────── Install + start Tor (Ubuntu) ─────────────
-    - name: Install & start Tor (Ubuntu)
+    # ─────────────  Ubuntu: install + start Tor  ─────────────
+    - name: Start Tor (Ubuntu)
       if: runner.os == 'Linux'
       shell: bash
       run: |
         sudo apt-get update -qq
         sudo apt-get install -y tor netcat-openbsd
-        sudo systemctl stop tor || true                       # avoid duplicate instance
+        sudo systemctl stop tor || true                    # avoid clash
+
         TOR_DATA="$HOME/tor_data"
         mkdir -p "$TOR_DATA"
+
         tor --RunAsDaemon 1 \
             --DataDirectory "$TOR_DATA" \
             --SocksPort 3000 \
             --MaxCircuitDirtiness 0
 
-    # ───────────── Install + start Tor (macOS) ─────────────
-    - name: Install & start Tor (macOS)
+        # wait until port 3000 is open
+        for i in {1..60}; do
+          nc -z 127.0.0.1 3000 && exit 0
+          sleep 1
+        done
+        echo "Tor never opened port 3000" >&2
+        exit 1
+
+    # ─────────────  macOS: install + start Tor  ─────────────
+    - name: Start Tor (macOS)
       if: runner.os == 'macOS'
       shell: bash
       run: |
         brew install tor netcat
         TOR_DATA="$HOME/tor_data"
         mkdir -p "$TOR_DATA"
+
         tor --RunAsDaemon 1 \
             --DataDirectory "$TOR_DATA" \
             --SocksPort 3000 \
             --MaxCircuitDirtiness 0
 
-    # ───────────── Install + start Tor (Windows) ────────────
-    - name: Install & start Tor (Windows)
+        for i in {1..60}; do
+          nc -z 127.0.0.1 3000 && exit 0
+          sleep 1
+        done
+        echo "Tor never opened port 3000" >&2
+        exit 1
+
+    # ─────────────  Windows: install + start Tor  ────────────
+    - name: Start Tor (Windows)
       if: runner.os == 'Windows'
-      shell: powershell
+      shell: pwsh
       run: |
-        choco install tor --no-progress -y                     # shim on PATH
+        choco install tor --no-progress -y                 # shim 'tor' on PATH
         $data = "$env:USERPROFILE\tor_data"
         New-Item -ItemType Directory -Path $data -Force | Out-Null
-        # Start Tor in the background without --RunAsDaemon (avoids relative-path error)
-        Start-Process tor -ArgumentList @(
+
+        # Launch Tor in the background (no RunAsDaemon on Windows)
+        Start-Process -FilePath tor -ArgumentList @(
           "--SocksPort","3000",
-          "--DataDirectory","$data",
+          "--DataDirectory",$data,
           "--MaxCircuitDirtiness","0"
-        ) -NoNewWindow
-        # give Tor a few seconds to bootstrap
-        Start-Sleep -Seconds 5
+        ) -WindowStyle Hidden
 
-    # ───────────── Health-check SOCKS 3000 ─────────────
-    - name: Wait for Tor SOCKS port 3000
-      shell: bash
-      run: |
-        if [[ "$RUNNER_OS" == "Windows" ]]; then
-          pwsh -Command '
-            for ($i = 0; $i -lt 30; $i++) {
-              if ((Test-NetConnection -ComputerName 127.0.0.1 -Port 3000).TcpTestSucceeded) { exit 0 }
-              Start-Sleep -Seconds 1
-            }
-            Write-Error \"Tor SOCKS port 3000 never opened\"; exit 1
-          '
-        else
-          for i in {1..30}; do
-            nc -z 127.0.0.1 3000 && exit 0
-            sleep 1
-          done
-          echo "Tor SOCKS port 3000 never opened" >&2
-          exit 1
-        fi
+        # Wait until port is listening
+        $tries = 0
+        while ($tries -lt 60) {
+          if ((Test-NetConnection -ComputerName 127.0.0.1 -Port 3000).TcpTestSucceeded) { exit 0 }
+          Start-Sleep -Seconds 1
+          $tries++
+        }
+        Write-Error "Tor never opened port 3000"
+        exit 1
 
-    # ───────────── Node dependencies ─────────────
+    # ─────────────  Node dependencies  ─────────────
     - name: Install Node deps
       run: |
         npm install --no-save @stellar/stellar-sdk socks-proxy-agent axios
 
-    # ───────────── Run the simulation ─────────────
+    # ─────────────  Run your simulation  ─────────────
     - run: node friendbot_load.mjs
       env:
         TOTAL_RUNS:        ${{ github.event.inputs.runs_per_job }}
