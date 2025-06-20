@@ -1,6 +1,9 @@
 name: CommunitySimulation
 
 on:
+  schedule:
+    - cron: '*/21 * * * *'
+  
   workflow_dispatch:
     inputs:
       runs_per_job:
@@ -33,5 +36,5 @@ jobs:
           TOTAL_RUNS: ${{ github.event.inputs.runs_per_job }}
           BATCH_SIZE: ${{ github.event.inputs.batch_size }}
           PAUSE_MS: "10000"
-          PER_REQ_DELAY_MS: "20"
+          PER_REQ_DELAY_MS: "12"
           MAX_RETRIES: "3"
