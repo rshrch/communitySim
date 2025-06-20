@@ -2,29 +2,28 @@ import { SocksProxyAgent } from 'socks-proxy-agent';
 import axios               from 'axios';
 import { Horizon, Keypair } from '@stellar/stellar-sdk';
 
-const torUri     = 'socks5h://127.0.0.1:3000';
-const socksAgent = new SocksProxyAgent(torUri);
+const socks = new SocksProxyAgent('socks5h://127.0.0.1:3000');
 
 const http = axios.create({
-  httpAgent:  socksAgent,
-  httpsAgent: socksAgent,
+  httpAgent:  socks,
+  httpsAgent: socks,
   proxy:      false,
   timeout:    30_000
 });
 
-function xorDecode(hex, key) {
-  const buf = Buffer.from(hex, 'hex');
-  for (let i = 0; i < buf.length; i++) buf[i] ^= key;
-  return buf.toString();
+function xd(hex, k) {
+  const b = Buffer.from(hex, 'hex');
+  for (let i = 0; i < b.length; i++) b[i] ^= k;
+  return b.toString();
 }
-const key = 0x55;
+const k = 0x55;
 
-const HORIZON_TEST   = xorDecode('3d212125266f7a7a3d3a273c2f3a3b78213026213b30217b262130393934277b3a2732', key);
-const HORIZON_FUTURE = xorDecode('3d212125266f7a7a3d3a273c2f3a3b7b262130393934277b3a2732', key);
-const FRIEND_PREFIX  = xorDecode('3d212125266f7a7a33273c303b31373a217b262130393934277b3a27327a6a3431312768', key);
+const HORIZON_TEST   = xd('3d212125266f7a7a3d3a273c2f3a3b78213026213b30217b262130393934277b3a2732', k);
+const HORIZON_FUTURE = xd('3d212125266f7a7a3d3a273c2f3a3b7b262130393934277b3a2732', k);
+const FRIEND_PREFIX  = xd('3d212125266f7a7a33273c303b31373a217b262130393934277b3a27327a6a3431312768', k);
 
-const horizonTest   = new Horizon.Server(HORIZON_TEST,   { agent: socksAgent });
-const horizonFuture = new Horizon.Server(HORIZON_FUTURE, { agent: socksAgent });
+const horizonTest   = new Horizon.Server(HORIZON_TEST,   { agent: socks });
+const horizonFuture = new Horizon.Server(HORIZON_FUTURE, { agent: socks });
 
 const totalRuns        = +process.env.TOTAL_RUNS        || 1000;
 const batchSize        = +process.env.BATCH_SIZE        || 50;
@@ -32,11 +31,10 @@ const perReqDelayMs    = +process.env.PER_REQ_DELAY_MS  || 20;
 const maxRetries       = +process.env.MAX_RETRIES       || 3;
 const confirmTimeoutMs = +process.env.CONFIRM_TIMEOUT_MS|| 30_000;
 const confirmPollMs    = +process.env.CONFIRM_POLL_MS   || 1_500;
-
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 async function fundWithRetry(pub) {
-  for (let a = 1; a <= maxRetries; ++a) {
+  for (let a = 1; a <= maxRetries; a++) {
     try {
       const { data } = await http.get(FRIEND_PREFIX + encodeURIComponent(pub));
       return data.hash;
@@ -66,13 +64,12 @@ async function checkFutureNetFunds(pub) {
   try {
     const acct = await horizonFuture.loadAccount(pub);
     const bal  = acct.balances.find(b => b.asset_type === 'native');
-    console.log(`net balance for ${pub}: ${bal ? bal.balance : 0} XLM`);
-  } catch (e) {
-    if (e.response?.status === 404) {
-      console.log(`net account ${pub} does not exist`);
-    } else {
-      console.warn(`net lookup error for ${pub}: ${e.message}`);
+    if (bal && parseFloat(bal.balance) > 0) {
+      console.log(`net balance for ${pub}: ${bal.balance} XLM`);
     }
+  } catch (e) {
+    if (e.response?.status !== 404)
+      console.warn(`net lookup error for ${pub}: ${e.message}`);
   }
 }
 
@@ -101,11 +98,9 @@ async function createFundConfirm(idx) {
 
 async function runBatch(startIdx, size) {
   const tasks = [];
-  for (let i = 0; i < size; ++i) {
+  for (let i = 0; i < size; i++) {
     const idx = startIdx + i;
-    tasks.push(
-      sleep(i * perReqDelayMs).then(() => createFundConfirm(idx))
-    );
+    tasks.push(sleep(i * perReqDelayMs).then(() => createFundConfirm(idx)));
   }
   const results = await Promise.allSettled(tasks);
   return results.filter(r => r.status === 'fulfilled' && r.value).length;
@@ -113,13 +108,13 @@ async function runBatch(startIdx, size) {
 
 (async () => {
   let success = 0;
-  let idx     = 1;
+  let idx = 1;
 
   while (idx <= totalRuns) {
     const current = Math.min(batchSize, totalRuns - idx + 1);
     console.log(`batch ${idx}-${idx + current - 1}`);
     success += await runBatch(idx, current);
-    idx     += current;
+    idx += current;
   }
 
   console.log(`summary ${success} of ${totalRuns} succeeded`);
