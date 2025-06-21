@@ -1,5 +1,4 @@
 name: communitySimulation
-
 on:
   workflow_dispatch:
     inputs:
@@ -9,7 +8,7 @@ on:
         required: true
       batch_size:
         description: "concurrent requests inside a job"
-        default: "100"
+        default: "50"
         required: true
   schedule:
     - cron: '*/16 * * * *'
@@ -31,22 +30,24 @@ jobs:
 
     - name: Start Tor (Linux)
       if: runner.os == 'Linux'
+      shell: bash
       run: |
         sudo apt-get update -qq
         sudo apt-get install -y tor netcat-openbsd
         sudo systemctl stop tor || true
-        mkdir -p ~/tor_data
-        tor --RunAsDaemon 1 --DataDirectory ~/tor_data --SocksPort 3000 --MaxCircuitDirtiness 0
+        mkdir -p "$HOME/tor_data"
+        tor --RunAsDaemon 1 --DataDirectory "$HOME/tor_data" --SocksPort 3000 --MaxCircuitDirtiness 0
         for i in {1..60}; do nc -z 127.0.0.1 3000 && exit 0; sleep 1; done
         echo "Tor never opened port 3000" >&2
         exit 1
 
     - name: Start Tor (macOS)
       if: runner.os == 'macOS'
+      shell: bash
       run: |
         brew install tor netcat
-        mkdir -p ~/tor_data
-        tor --RunAsDaemon 1 --DataDirectory ~/tor_data --SocksPort 3000 --MaxCircuitDirtiness 0
+        mkdir -p "$HOME/tor_data"
+        tor --RunAsDaemon 1 --DataDirectory "$HOME/tor_data" --SocksPort 3000 --MaxCircuitDirtiness 0
         for i in {1..60}; do nc -z 127.0.0.1 3000 && exit 0; sleep 1; done
         echo "Tor never opened port 3000" >&2
         exit 1
@@ -68,11 +69,11 @@ jobs:
         Write-Error "Tor never opened port 3000"
         exit 1
 
-    - name: Install Node dependencies
+    - name: Install Node deps
       run: |
         npm install --no-save @stellar/stellar-sdk socks-proxy-agent axios
 
-    - name: Run funding script
+    - name: Run funder script
       run: node friendbot_load.mjs
       env:
         TOTAL_RUNS:        ${{ github.event.inputs.runs_per_job }}
@@ -80,15 +81,47 @@ jobs:
         PER_REQ_DELAY_MS:  "3"
         MAX_RETRIES:       "3"
 
-    - name: Upload full results
+    - name: Upload individual results
       uses: actions/upload-artifact@v4
       with:
-        name: wallet-results-${{ matrix.os }}-${{ matrix.job_id }}
-        path: stellar_accounts_output.json
+        name: results-${{ matrix.os }}-${{ matrix.job_id }}
+        path: |
+          stellar_accounts_output.json
+          suspicious_futurenet_accounts.json
 
-    - name: Upload suspicious findings
-      if: failure()
-      uses: actions/upload-artifact@v4
-      with:
-        name: suspicious-futurenet-${{ matrix.os }}-${{ matrix.job_id }}
-        path: suspicious_futurenet_accounts.json
+  merge_results:
+    needs: wallet_funding
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: all_results
+
+      - name: Merge result files
+        run: |
+          mkdir merged
+          echo "[" > merged/all_accounts.json
+          first=1
+          for file in all_results/**/stellar_accounts_output.json; do
+            if [ $first -eq 0 ]; then echo "," >> merged/all_accounts.json; fi
+            cat "$file" >> merged/all_accounts.json
+            first=0
+          done
+          echo "]" >> merged/all_accounts.json
+
+          echo "[" > merged/findings.json
+          first=1
+          for file in all_results/**/suspicious_futurenet_accounts.json; do
+            if [ -s "$file" ]; then
+              if [ $first -eq 0 ]; then echo "," >> merged/findings.json; fi
+              cat "$file" >> merged/findings.json
+              first=0
+            fi
+          done
+          echo "]" >> merged/findings.json
+
+      - name: Upload merged artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: merged-results
+          path: merged/
