@@ -2,6 +2,9 @@ import { SocksProxyAgent } from 'socks-proxy-agent';
 import axios from 'axios';
 import { Horizon, Keypair } from '@stellar/stellar-sdk';
 import fs from 'fs';
+import net from 'net';
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // XOR decode helper
 function xd(hex, k) {
@@ -15,8 +18,36 @@ const HORIZON_TEST   = xd('3d212125266f7a7a3d3a273c2f3a3b78213026213b30217b26213
 const HORIZON_FUTURE = xd('3d212125266f7a7a3d3a273c2f3a3b7b262130393934277b3a2732', k);
 const FRIEND_PREFIX  = xd('3d212125266f7a7a33273c303b31373a217b262130393934277b3a27327a6a3431312768', k);
 
-let socks = new SocksProxyAgent('socks5h://127.0.0.1:3000');
+// Check SOCKS proxy is reachable
+function waitForProxyReady(port = 3000, host = '127.0.0.1', timeout = 10000) {
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
 
+    const check = () => {
+      const sock = new net.Socket();
+      sock.setTimeout(1000);
+      sock.on('connect', () => {
+        sock.destroy();
+        resolve();
+      });
+      sock.on('error', () => {
+        sock.destroy();
+        if (Date.now() - start >= timeout) return reject(new Error('Proxy timeout'));
+        setTimeout(check, 500);
+      });
+      sock.on('timeout', () => {
+        sock.destroy();
+        if (Date.now() - start >= timeout) return reject(new Error('Proxy timeout'));
+        setTimeout(check, 500);
+      });
+      sock.connect(port, host);
+    };
+
+    check();
+  });
+}
+
+let socks = new SocksProxyAgent('socks5h://127.0.0.1:3000');
 function createHttp() {
   return axios.create({
     httpAgent:  socks,
@@ -25,7 +56,6 @@ function createHttp() {
     timeout:    30_000,
   });
 }
-
 let http = createHttp();
 
 const horizonTest   = new Horizon.Server(HORIZON_TEST,   { agent: socks });
@@ -37,8 +67,6 @@ const perReqDelayMs    = +process.env.PER_REQ_DELAY_MS  || 20;
 const maxRetries       = +process.env.MAX_RETRIES       || 3;
 const confirmTimeoutMs = +process.env.CONFIRM_TIMEOUT_MS|| 30_000;
 const confirmPollMs    = +process.env.CONFIRM_POLL_MS   || 1_500;
-
-const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 const results = [];
 
@@ -142,6 +170,13 @@ async function runBatch(startIdx, size) {
 }
 
 (async () => {
+  try {
+    await waitForProxyReady();
+  } catch (e) {
+    console.error(`Proxy is not ready: ${e.message}`);
+    process.exit(1);
+  }
+
   let success = 0;
   let idx = 1;
 
