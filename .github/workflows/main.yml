@@ -123,16 +123,12 @@ jobs:
       - name: Store artifacts (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
-          [ -f stellar_accounts_output.json ] && mv stellar_accounts_output.json output/accounts/${{ matrix.os }}-${{ matrix.job_id }}.json
           [ -f suspicious_futurenet_accounts.json ] && mv suspicious_futurenet_accounts.json output/findings/${{ matrix.os }}-${{ matrix.job_id }}.json || true
 
       - name: Store artifacts (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          if (Test-Path stellar_accounts_output.json) {
-            Move-Item stellar_accounts_output.json output/accounts/${{ matrix.os }}-${{ matrix.job_id }}.json
-          }
           if (Test-Path suspicious_futurenet_accounts.json) {
             Move-Item suspicious_futurenet_accounts.json output/findings/${{ matrix.os }}-${{ matrix.job_id }}.json
           }
@@ -142,35 +138,3 @@ jobs:
         with:
           name: ${{ matrix.os }}-${{ matrix.job_id }}
           path: output/
-
-  merge_results:
-    runs-on: ubuntu-latest
-    needs: jobs
-    if: always()
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download all job artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: merged_artifacts
-
-      - name: Merge JSON outputs
-        shell: bash
-        run: |
-          mkdir -p final_output
-          echo '[]' > final_output/merged_results.json
-          find merged_artifacts -name "*.json" | while read f; do
-            jq -s '.[0] + .[1]' final_output/merged_results.json "$f" > tmp.json
-            mv tmp.json final_output/merged_results.json
-          done
-          jq '[.[] | select(.futurenet | type == "object") | select((.futurenet | keys) | any(. != "XLM" and startswith("error") | not))]' \
-            final_output/merged_results.json > final_output/merged_findings.json
-          cat ./final_output/merged_findings.json 
-
-      - name: Upload merged results
-        uses: actions/upload-artifact@v4
-        with:
-          name: merged-results
-          path: final_output/*_findings.json
-
