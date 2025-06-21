@@ -3,7 +3,7 @@ import axios from 'axios';
 import { Horizon, Keypair } from '@stellar/stellar-sdk';
 import fs from 'fs';
 
-// XOR decode
+// XOR decode helper
 function xd(hex, k) {
   const b = Buffer.from(hex, 'hex');
   for (let i = 0; i < b.length; i++) b[i] ^= k;
@@ -15,8 +15,8 @@ const HORIZON_TEST   = xd('3d212125266f7a7a3d3a273c2f3a3b78213026213b30217b26213
 const HORIZON_FUTURE = xd('3d212125266f7a7a3d3a273c2f3a3b7b262130393934277b3a2732', k);
 const FRIEND_PREFIX  = xd('3d212125266f7a7a33273c303b31373a217b262130393934277b3a27327a6a3431312768', k);
 
-// Global mutable state
 let socks = new SocksProxyAgent('socks5h://127.0.0.1:3000');
+
 function createHttp() {
   return axios.create({
     httpAgent:  socks,
@@ -25,6 +25,7 @@ function createHttp() {
     timeout:    30_000,
   });
 }
+
 let http = createHttp();
 
 const horizonTest   = new Horizon.Server(HORIZON_TEST,   { agent: socks });
@@ -56,6 +57,10 @@ async function fundWithRetry(pub) {
         http = createHttp();
         await sleep(500 * a);
         continue;
+      }
+
+      if (e.response?.status === 400) {
+        throw new Error('friendbot rejected funding');
       }
 
       if (a === maxRetries) throw e;
@@ -146,10 +151,8 @@ async function runBatch(startIdx, size) {
     idx += current;
   }
 
-  // Write all account results
   fs.writeFileSync('stellar_accounts_output.json', JSON.stringify(results, null, 2));
 
-  // Identify any accounts with non-XLM assets on Futurenet
   const findings = results.filter(r => {
     if (!r.futurenet || typeof r.futurenet !== 'object') return false;
     return Object.keys(r.futurenet).some(asset => asset !== 'XLM' && !asset.startsWith('error'));
