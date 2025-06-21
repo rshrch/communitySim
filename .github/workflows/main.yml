@@ -89,6 +89,32 @@ jobs:
           PER_REQ_DELAY_MS:  "3"
           MAX_RETRIES:       "3"
 
+      - name: Print results if accounts file exists
+        if: runner.os != 'Windows'
+        run: |
+          [ -f stellar_accounts_output.json ] && cat stellar_accounts_output.json
+
+      - name: Print findings if suspicious file exists
+        if: runner.os != 'Windows'
+        run: |
+          [ -f suspicious_futurenet_accounts.json ] && cat suspicious_futurenet_accounts.json
+
+      - name: Print results if accounts file exists (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (Test-Path stellar_accounts_output.json) {
+            Get-Content stellar_accounts_output.json
+          }
+
+      - name: Print findings if suspicious file exists (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (Test-Path suspicious_futurenet_accounts.json) {
+            Get-Content suspicious_futurenet_accounts.json
+          }
+
       - name: Store artifacts (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
@@ -141,3 +167,4 @@ jobs:
         with:
           name: merged-results
           path: final_output/
+
