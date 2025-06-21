@@ -1,4 +1,5 @@
 name: communitySimulation
+
 on:
   workflow_dispatch:
     inputs:
@@ -74,35 +75,40 @@ jobs:
         npm install --no-save @stellar/stellar-sdk socks-proxy-agent axios
 
     - name: Run funder script
-      run: node friendbot_load.mjs
+      run: |
+        mkdir -p output/accounts output/findings
+        node friendbot_load.mjs > /dev/null
       env:
         TOTAL_RUNS:        ${{ github.event.inputs.runs_per_job }}
         BATCH_SIZE:        ${{ github.event.inputs.batch_size }}
         PER_REQ_DELAY_MS:  "3"
         MAX_RETRIES:       "3"
 
-    - name: Upload individual results
+    - name: Move result files
+      run: |
+        mv stellar_accounts_output.json output/accounts/${{ matrix.os }}-${{ matrix.job_id }}.json || true
+        mv suspicious_futurenet_accounts.json output/findings/${{ matrix.os }}-${{ matrix.job_id }}.json || true
+
+    - name: Upload all output files for merge
       uses: actions/upload-artifact@v4
       with:
-        name: results-${{ matrix.os }}-${{ matrix.job_id }}
-        path: |
-          stellar_accounts_output.json
-          suspicious_futurenet_accounts.json
-
+        name: outputs-${{ matrix.os }}-${{ matrix.job_id }}
+        path: output/
+  
   merge_results:
     needs: wallet_funding
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
-          path: all_results
+          path: all_outputs
 
-      - name: Merge result files
+      - name: Merge account and findings files
         run: |
-          mkdir merged
+          mkdir -p merged
           echo "[" > merged/all_accounts.json
           first=1
-          for file in all_results/**/stellar_accounts_output.json; do
+          for file in all_outputs/**/accounts/*.json; do
             if [ $first -eq 0 ]; then echo "," >> merged/all_accounts.json; fi
             cat "$file" >> merged/all_accounts.json
             first=0
@@ -111,7 +117,7 @@ jobs:
 
           echo "[" > merged/findings.json
           first=1
-          for file in all_results/**/suspicious_futurenet_accounts.json; do
+          for file in all_outputs/**/findings/*.json; do
             if [ -s "$file" ]; then
               if [ $first -eq 0 ]; then echo "," >> merged/findings.json; fi
               cat "$file" >> merged/findings.json
@@ -120,8 +126,9 @@ jobs:
           done
           echo "]" >> merged/findings.json
 
-      - name: Upload merged artifacts
+      - name: Upload merged results
         uses: actions/upload-artifact@v4
         with:
           name: merged-results
           path: merged/
+
