@@ -9,7 +9,7 @@ on:
         required: true
       batch_size:
         description: "concurrent requests inside a job"
-        default: "250"
+        default: "100"
         required: true
   schedule:
     - cron: '*/16 * * * *'
