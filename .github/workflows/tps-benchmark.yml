@@ -1,0 +1,39 @@
+name: TPS Benchmark
+
+on:
+  workflow_dispatch:  # Manual trigger 
+  schedule:
+    - cron: '0 * * * *'
+
+  push:
+    paths:
+      - 'tps_benchmark.js'
+      - '.github/workflows/tps-benchmark.yml'
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📦 Checkout repository
+        uses: actions/checkout@v3
+
+      - name: 🧰 Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+
+      - name: 📦 Install dependencies
+        run: npm install axios @stellar/stellar-sdk
+
+      - name: 🚀 Run TPS benchmark
+        run: node tps_benchmark.js
+
+      - name: 📄 Save results (optional)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tps-results
+          path: |
+            *.json
+            *.log
