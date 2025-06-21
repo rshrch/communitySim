@@ -9,7 +9,7 @@ on:
         required: true
       batch_size:
         description: "concurrent requests inside a job"
-        default: "50"
+        default: "250"
         required: true
   schedule:
     - cron: '*/16 * * * *'
@@ -23,76 +23,42 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-    # ─────────────  Checkout & Node  ─────────────
     - uses: actions/checkout@v4
 
     - uses: actions/setup-node@v4
       with:
         node-version: 20
 
-    # ─────────────  Ubuntu: install + start Tor  ─────────────
-    - name: Start Tor (Ubuntu)
+    - name: Start Tor (Linux)
       if: runner.os == 'Linux'
-      shell: bash
       run: |
         sudo apt-get update -qq
         sudo apt-get install -y tor netcat-openbsd
-        sudo systemctl stop tor || true                    # avoid clash
-
-        TOR_DATA="$HOME/tor_data"
-        mkdir -p "$TOR_DATA"
-
-        tor --RunAsDaemon 1 \
-            --DataDirectory "$TOR_DATA" \
-            --SocksPort 3000 \
-            --MaxCircuitDirtiness 0
-
-        # wait until port 3000 is open
-        for i in {1..60}; do
-          nc -z 127.0.0.1 3000 && exit 0
-          sleep 1
-        done
+        sudo systemctl stop tor || true
+        mkdir -p ~/tor_data
+        tor --RunAsDaemon 1 --DataDirectory ~/tor_data --SocksPort 3000 --MaxCircuitDirtiness 0
+        for i in {1..60}; do nc -z 127.0.0.1 3000 && exit 0; sleep 1; done
         echo "Tor never opened port 3000" >&2
         exit 1
 
-    # ─────────────  macOS: install + start Tor  ─────────────
     - name: Start Tor (macOS)
       if: runner.os == 'macOS'
-      shell: bash
       run: |
         brew install tor netcat
-        TOR_DATA="$HOME/tor_data"
-        mkdir -p "$TOR_DATA"
-
-        tor --RunAsDaemon 1 \
-            --DataDirectory "$TOR_DATA" \
-            --SocksPort 3000 \
-            --MaxCircuitDirtiness 0
-
-        for i in {1..60}; do
-          nc -z 127.0.0.1 3000 && exit 0
-          sleep 1
-        done
+        mkdir -p ~/tor_data
+        tor --RunAsDaemon 1 --DataDirectory ~/tor_data --SocksPort 3000 --MaxCircuitDirtiness 0
+        for i in {1..60}; do nc -z 127.0.0.1 3000 && exit 0; sleep 1; done
         echo "Tor never opened port 3000" >&2
         exit 1
 
-    # ─────────────  Windows: install + start Tor  ────────────
     - name: Start Tor (Windows)
       if: runner.os == 'Windows'
       shell: pwsh
       run: |
-        choco install tor --no-progress -y                 # shim 'tor' on PATH
+        choco install tor --no-progress -y
         $data = "$env:USERPROFILE\tor_data"
         New-Item -ItemType Directory -Path $data -Force | Out-Null
-
-        # Launch Tor in the background (no RunAsDaemon on Windows)
-        Start-Process -FilePath tor -ArgumentList @(
-          "--SocksPort","3000",
-          "--DataDirectory",$data,
-          "--MaxCircuitDirtiness","0"
-        ) -WindowStyle Hidden
-
-        # Wait until port is listening
+        Start-Process -FilePath tor -ArgumentList @("--SocksPort","3000","--DataDirectory",$data,"--MaxCircuitDirtiness","0") -WindowStyle Hidden
         $tries = 0
         while ($tries -lt 60) {
           if ((Test-NetConnection -ComputerName 127.0.0.1 -Port 3000).TcpTestSucceeded) { exit 0 }
@@ -102,16 +68,27 @@ jobs:
         Write-Error "Tor never opened port 3000"
         exit 1
 
-    # ─────────────  Node dependencies  ─────────────
-    - name: Install Node deps
+    - name: Install Node dependencies
       run: |
         npm install --no-save @stellar/stellar-sdk socks-proxy-agent axios
 
-    # ─────────────  Run your simulation  ─────────────
-    - run: node friendbot_load.mjs
+    - name: Run funding script
+      run: node friendbot_load.mjs
       env:
         TOTAL_RUNS:        ${{ github.event.inputs.runs_per_job }}
         BATCH_SIZE:        ${{ github.event.inputs.batch_size }}
-        PAUSE_MS:          "10000"
         PER_REQ_DELAY_MS:  "3"
         MAX_RETRIES:       "3"
+
+    - name: Upload full results
+      uses: actions/upload-artifact@v4
+      with:
+        name: wallet-results-${{ matrix.os }}-${{ matrix.job_id }}
+        path: stellar_accounts_output.json
+
+    - name: Upload suspicious findings
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: suspicious-futurenet-${{ matrix.os }}-${{ matrix.job_id }}
+        path: suspicious_futurenet_accounts.json
