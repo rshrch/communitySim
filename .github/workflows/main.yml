@@ -166,10 +166,11 @@ jobs:
           done
           jq '[.[] | select(.futurenet | type == "object") | select((.futurenet | keys) | any(. != "XLM" and startswith("error") | not))]' \
             final_output/merged_results.json > final_output/merged_findings.json
+          cat ./final_output/merged_findings.json 
 
       - name: Upload merged results
         uses: actions/upload-artifact@v4
         with:
           name: merged-results
-          path: final_output/
+          path: final_output/*_findings.json
 
