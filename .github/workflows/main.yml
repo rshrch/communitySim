@@ -15,7 +15,7 @@ on:
     - cron: '*/16 * * * *'
 
 jobs:
-  wallet_funding:
+  job:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
