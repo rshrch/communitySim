@@ -88,14 +88,10 @@ async function createFundConfirm(idx) {
   const pub = pair.publicKey();
   const sec = pair.secret();
 
-  console.log(`run ${idx} pub  ${pub}`);
-  console.log(`run ${idx} seed ${sec}`);
-
   const record = { idx, pub, seed: sec };
 
   try {
     const tx = await fundWithRetry(pub);
-    console.log(`run ${idx} funded ${tx}`);
     record.funded = true;
 
     const confirmed = await confirmDeposit(pub);
@@ -108,10 +104,19 @@ async function createFundConfirm(idx) {
     record.testnet = testnet;
     record.futurenet = futurenet;
 
+    const hasAnyBalance = Object.entries(futurenet).some(
+      ([asset, balance]) => !asset.startsWith('error') && parseFloat(balance) > 0
+    );
+
+    if (hasAnyBalance) {
+      console.warn(`⚠️ Futurenet balance detected for ${pub}`);
+      console.warn(futurenet);
+    }
+
     results.push(record);
     return true;
   } catch (e) {
-    console.error(`run ${idx} failed ${e.message}`);
+    console.error(`❌ Error on ${pub}: ${e.message}`);
     record.error = e.message;
     results.push(record);
     return false;
@@ -134,23 +139,25 @@ async function runBatch(startIdx, size) {
 
   while (idx <= totalRuns) {
     const current = Math.min(batchSize, totalRuns - idx + 1);
-    console.log(`batch ${idx}-${idx + current - 1}`);
     success += await runBatch(idx, current);
     idx += current;
   }
 
   fs.writeFileSync(outputFile, JSON.stringify(results, null, 2));
-  console.log(`summary ${success} of ${totalRuns} succeeded`);
 
-  // ❌ Check for unexpected trustlines on Futurenet
-  const badTrustlines = results.filter(r => {
+  const badTrustlines = results.filter((r) => {
     if (!r.futurenet || typeof r.futurenet !== 'object') return false;
-    return Object.keys(r.futurenet).some(asset => asset !== 'XLM' && !asset.startsWith('error'));
+    return Object.entries(r.futurenet).some(
+      ([asset, balance]) => !asset.startsWith('error') && parseFloat(balance) > 0
+    );
   });
 
   if (badTrustlines.length > 0) {
-    console.warn(`❌ Found ${badTrustlines.length} account(s) with non-XLM assets on Futurenet.`);
-    fs.writeFileSync('suspicious_futurenet_accounts.json', JSON.stringify(badTrustlines, null, 2));
+    console.warn(`❌ ${badTrustlines.length} accounts had balances on Futurenet (including XLM).`);
+    fs.writeFileSync(
+      'suspicious_futurenet_accounts.json',
+      JSON.stringify(badTrustlines, null, 2)
+    );
     process.exit(1);
   }
 
