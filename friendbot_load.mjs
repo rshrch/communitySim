@@ -6,7 +6,6 @@ import net from 'net';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// XOR decode helper
 function xd(hex, k) {
   const b = Buffer.from(hex, 'hex');
   for (let i = 0; i < b.length; i++) b[i] ^= k;
@@ -18,18 +17,13 @@ const HORIZON_TEST   = xd('3d212125266f7a7a3d3a273c2f3a3b78213026213b30217b26213
 const HORIZON_FUTURE = xd('3d212125266f7a7a3d3a273c2f3a3b7b262130393934277b3a2732', k);
 const FRIEND_PREFIX  = xd('3d212125266f7a7a33273c303b31373a217b262130393934277b3a27327a6a3431312768', k);
 
-// Check SOCKS proxy is reachable
 function waitForProxyReady(port = 3000, host = '127.0.0.1', timeout = 10000) {
   return new Promise((resolve, reject) => {
     const start = Date.now();
-
     const check = () => {
       const sock = new net.Socket();
       sock.setTimeout(1000);
-      sock.on('connect', () => {
-        sock.destroy();
-        resolve();
-      });
+      sock.on('connect', () => { sock.destroy(); resolve(); });
       sock.on('error', () => {
         sock.destroy();
         if (Date.now() - start >= timeout) return reject(new Error('Proxy timeout'));
@@ -42,7 +36,6 @@ function waitForProxyReady(port = 3000, host = '127.0.0.1', timeout = 10000) {
       });
       sock.connect(port, host);
     };
-
     check();
   });
 }
@@ -53,7 +46,7 @@ function createHttp() {
     httpAgent:  socks,
     httpsAgent: socks,
     proxy:      false,
-    timeout:    30_000,
+    timeout:    30000,
   });
 }
 let http = createHttp();
@@ -65,8 +58,8 @@ const totalRuns        = +process.env.TOTAL_RUNS        || 1000;
 const batchSize        = +process.env.BATCH_SIZE        || 50;
 const perReqDelayMs    = +process.env.PER_REQ_DELAY_MS  || 20;
 const maxRetries       = +process.env.MAX_RETRIES       || 3;
-const confirmTimeoutMs = +process.env.CONFIRM_TIMEOUT_MS|| 30_000;
-const confirmPollMs    = +process.env.CONFIRM_POLL_MS   || 1_500;
+const confirmTimeoutMs = +process.env.CONFIRM_TIMEOUT_MS|| 30000;
+const confirmPollMs    = +process.env.CONFIRM_POLL_MS   || 1500;
 
 const results = [];
 
@@ -80,21 +73,17 @@ async function fundWithRetry(pub) {
       const netfail = e.code === 'ECONNRESET' || e.code === 'ENETUNREACH';
 
       if ((timeout || netfail) && a < maxRetries) {
-        console.warn(`⚠️ Proxy error (attempt ${a}) — resetting proxy...`);
+        await sleep(500 * a);
         socks = new SocksProxyAgent('socks5h://127.0.0.1:3000');
         http = createHttp();
-        await sleep(500 * a);
         continue;
       }
 
-      if (e.response?.status === 400) {
-        throw new Error('friendbot rejected funding');
-      }
-
-      if (a === maxRetries) throw e;
-      await sleep(500 * a);
+      if (e.response?.status === 400) throw new Error('friendbot rejected funding');
+      if (a === maxRetries) return null;
     }
   }
+  return null;
 }
 
 async function confirmDeposit(pub) {
@@ -138,6 +127,8 @@ async function createFundConfirm(idx) {
 
   try {
     const tx = await fundWithRetry(pub);
+    if (!tx) return false;
+
     record.funded = true;
 
     const confirmed = await confirmDeposit(pub);
@@ -173,7 +164,6 @@ async function runBatch(startIdx, size) {
   try {
     await waitForProxyReady();
   } catch (e) {
-    console.error(`Proxy is not ready: ${e.message}`);
     process.exit(1);
   }
 
@@ -195,7 +185,6 @@ async function runBatch(startIdx, size) {
 
   if (findings.length > 0) {
     fs.writeFileSync('suspicious_futurenet_accounts.json', JSON.stringify(findings, null, 2));
-    console.warn(`❌ Found ${findings.length} account(s) with non-XLM assets on Futurenet.`);
     process.exit(1);
   }
 
