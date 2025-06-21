@@ -29,6 +29,20 @@ jobs:
       with:
         node-version: 20
 
+    # 🧠 Cache NPM dependencies for faster installs
+    - name: Cache Node modules
+      uses: actions/cache@v4
+      with:
+        path: ~/.npm
+        key: ${{ runner.os }}-npm-cache-${{ hashFiles('**/friendbot_load.mjs') }}
+        restore-keys: |
+          ${{ runner.os }}-npm-cache-
+
+    - name: Install Node deps
+      run: |
+        npm install --no-save @stellar/stellar-sdk socks-proxy-agent axios
+
+    # 🌐 Start Tor per platform
     - name: Start Tor (Linux)
       if: runner.os == 'Linux'
       shell: bash
@@ -70,10 +84,7 @@ jobs:
         Write-Error "Tor never opened port 3000"
         exit 1
 
-    - name: Install Node deps
-      run: |
-        npm install --no-save @stellar/stellar-sdk socks-proxy-agent axios
-
+    # 🚀 Run funding script and save outputs
     - name: Run funder script
       run: |
         mkdir -p output/accounts output/findings
@@ -89,12 +100,12 @@ jobs:
         mv stellar_accounts_output.json output/accounts/${{ matrix.os }}-${{ matrix.job_id }}.json || true
         mv suspicious_futurenet_accounts.json output/findings/${{ matrix.os }}-${{ matrix.job_id }}.json || true
 
-    - name: Upload all output files for merge
+    - name: Upload outputs for merging
       uses: actions/upload-artifact@v4
       with:
         name: outputs-${{ matrix.os }}-${{ matrix.job_id }}
         path: output/
-  
+
   merge_results:
     needs: wallet_funding
     runs-on: ubuntu-latest
@@ -103,7 +114,7 @@ jobs:
         with:
           path: all_outputs
 
-      - name: Merge account and findings files
+      - name: Merge JSON results
         run: |
           mkdir -p merged
           echo "[" > merged/all_accounts.json
@@ -126,9 +137,8 @@ jobs:
           done
           echo "]" >> merged/findings.json
 
-      - name: Upload merged results
+      - name: Upload final merged results
         uses: actions/upload-artifact@v4
         with:
           name: merged-results
           path: merged/
-
