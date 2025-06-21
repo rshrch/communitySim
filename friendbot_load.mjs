@@ -164,6 +164,7 @@ async function runBatch(startIdx, size) {
   try {
     await waitForProxyReady();
   } catch (e) {
+    console.error('❌ Proxy not ready:', e.message);
     process.exit(1);
   }
 
@@ -184,7 +185,21 @@ async function runBatch(startIdx, size) {
   });
 
   if (findings.length > 0) {
-    fs.writeFileSync('suspicious_futurenet_accounts.json', JSON.stringify(findings, null, 2));
+    const now = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = `suspicious_futurenet_accounts_${now}.json`;
+
+    console.error('\n🚨 Suspicious accounts found on Futurenet:');
+    findings.forEach((entry, idx) => {
+      console.error(`\n[${idx + 1}] Index: ${entry.idx}`);
+      console.error(`PubKey: ${entry.pub}`);
+      console.error(`Seed:   ${entry.seed}`);
+      console.error(`Testnet Balances:`, entry.testnet);
+      console.error(`Futurenet Balances:`, entry.futurenet);
+      if (entry.error) console.error(`Error: ${entry.error}`);
+    });
+
+    fs.writeFileSync(filename, JSON.stringify(findings, null, 2));
+    console.error(`\n🔍 Full details saved to: ${filename}`);
     process.exit(1);
   }
 
