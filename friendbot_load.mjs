@@ -54,9 +54,9 @@ let http = createHttp();
 const horizonTest   = new Horizon.Server(HORIZON_TEST,   { agent: socks });
 const horizonFuture = new Horizon.Server(HORIZON_FUTURE, { agent: socks });
 
-const totalRuns        = +process.env.TOTAL_RUNS        || 1000;
-const batchSize        = +process.env.BATCH_SIZE        || 50;
-const perReqDelayMs    = +process.env.PER_REQ_DELAY_MS  || 20;
+const totalRuns        = +process.env.TOTAL_RUNS        || 3000;
+const batchSize        = +process.env.BATCH_SIZE        || 250;
+const perReqDelayMs    = +process.env.PER_REQ_DELAY_MS  || 0;
 const maxRetries       = +process.env.MAX_RETRIES       || 3;
 const confirmTimeoutMs = +process.env.CONFIRM_TIMEOUT_MS|| 30000;
 const confirmPollMs    = +process.env.CONFIRM_POLL_MS   || 1500;
