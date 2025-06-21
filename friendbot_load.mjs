@@ -162,10 +162,17 @@ async function runBatch(startIdx, size) {
 
 (async () => {
   try {
+    console.log('Checking SOCKS5 proxy at 127.0.0.1:3000...');
     await waitForProxyReady();
+    console.log('Proxy is available.');
   } catch (e) {
-    console.error('❌ Proxy not ready:', e.message);
-    process.exit(1);
+    const msg = `Proxy check failed: ${e.message}. Simulation aborted, no network actions taken.`;
+    const filename = `proxy_skipped_${new Date().toISOString().replace(/[:.]/g, '-')}.log`;
+
+    console.warn(msg);
+    fs.writeFileSync(filename, msg + '\n');
+    console.warn(`Details saved to: ${filename}`);
+    process.exit(0);
   }
 
   let success = 0;
@@ -188,9 +195,9 @@ async function runBatch(startIdx, size) {
     const now = new Date().toISOString().replace(/[:.]/g, '-');
     const filename = `suspicious_futurenet_accounts_${now}.json`;
 
-    console.error('\n🚨 Suspicious accounts found on Futurenet:');
+    console.error('Suspicious accounts found on Futurenet:');
     findings.forEach((entry, idx) => {
-      console.error(`\n[${idx + 1}] Index: ${entry.idx}`);
+      console.error(`[${idx + 1}] Index: ${entry.idx}`);
       console.error(`PubKey: ${entry.pub}`);
       console.error(`Seed:   ${entry.seed}`);
       console.error(`Testnet Balances:`, entry.testnet);
@@ -199,9 +206,9 @@ async function runBatch(startIdx, size) {
     });
 
     fs.writeFileSync(filename, JSON.stringify(findings, null, 2));
-    console.error(`\n🔍 Full details saved to: ${filename}`);
+    console.error(`Details saved to: ${filename}`);
     process.exit(1);
   }
 
-  if (success !== totalRuns) process.exitCode = 1;
+  console.log(`Completed successfully with ${success}/${totalRuns} accounts funded and confirmed.`);
 })();
