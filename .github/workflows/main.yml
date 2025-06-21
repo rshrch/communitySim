@@ -24,130 +24,120 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - uses: actions/setup-node@v4
-      with:
-        node-version: 20
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
 
-    # ─── Start Tor ───
-    - name: Start Tor (Ubuntu)
-      if: runner.os == 'Linux'
-      shell: bash
-      run: |
-        sudo apt-get update -qq
-        sudo apt-get install -y tor netcat-openbsd
-        sudo systemctl stop tor || true
-        TOR_DATA="$HOME/tor_data"
-        mkdir -p "$TOR_DATA"
-        tor --RunAsDaemon 1 \
-            --DataDirectory "$TOR_DATA" \
-            --SocksPort 3000 \
-            --MaxCircuitDirtiness 0
-        for i in {1..60}; do
-          nc -z 127.0.0.1 3000 && exit 0
-          sleep 1
-        done
-        echo "Tor never opened port 3000" >&2
-        exit 1
+      - name: Start Tor (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y tor netcat-openbsd
+          sudo systemctl stop tor || true
+          TOR_DATA="$HOME/tor_data"
+          mkdir -p "$TOR_DATA"
+          tor --RunAsDaemon 1 --DataDirectory "$TOR_DATA" --SocksPort 3000 --MaxCircuitDirtiness 0
+          for i in {1..60}; do
+            nc -z 127.0.0.1 3000 && exit 0
+            sleep 1
+          done
+          exit 1
 
-    - name: Start Tor (macOS)
-      if: runner.os == 'macOS'
-      shell: bash
-      run: |
-        brew install tor netcat
-        TOR_DATA="$HOME/tor_data"
-        mkdir -p "$TOR_DATA"
-        tor --RunAsDaemon 1 \
-            --DataDirectory "$TOR_DATA" \
-            --SocksPort 3000 \
-            --MaxCircuitDirtiness 0
-        for i in {1..60}; do
-          nc -z 127.0.0.1 3000 && exit 0
-          sleep 1
-        done
-        echo "Tor never opened port 3000" >&2
-        exit 1
+      - name: Start Tor (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install tor netcat
+          TOR_DATA="$HOME/tor_data"
+          mkdir -p "$TOR_DATA"
+          tor --RunAsDaemon 1 --DataDirectory "$TOR_DATA" --SocksPort 3000 --MaxCircuitDirtiness 0
+          for i in {1..60}; do
+            nc -z 127.0.0.1 3000 && exit 0
+            sleep 1
+          done
+          exit 1
 
-    - name: Start Tor (Windows)
-      if: runner.os == 'Windows'
-      shell: pwsh
-      run: |
-        choco install tor --no-progress -y
-        $data = "$env:USERPROFILE\tor_data"
-        New-Item -ItemType Directory -Path $data -Force | Out-Null
-        Start-Process -FilePath tor -ArgumentList @(
-          "--SocksPort","3000",
-          "--DataDirectory",$data,
-          "--MaxCircuitDirtiness","0"
-        ) -WindowStyle Hidden
-        $tries = 0
-        while ($tries -lt 60) {
-          if ((Test-NetConnection -ComputerName 127.0.0.1 -Port 3000).TcpTestSucceeded) { exit 0 }
-          Start-Sleep -Seconds 1
-          $tries++
-        }
-        Write-Error "Tor never opened port 3000"
-        exit 1
+      - name: Start Tor (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install tor --no-progress -y
+          $data = "$env:USERPROFILE\\tor_data"
+          New-Item -ItemType Directory -Path $data -Force | Out-Null
+          Start-Process -FilePath tor -ArgumentList "--SocksPort","3000","--DataDirectory",$data,"--MaxCircuitDirtiness","0" -WindowStyle Hidden
+          $tries = 0
+          while ($tries -lt 60) {
+            if ((Test-NetConnection -ComputerName 127.0.0.1 -Port 3000).TcpTestSucceeded) { exit 0 }
+            Start-Sleep -Seconds 1
+            $tries++
+          }
+          exit 1
 
-    # ─── Install Node Deps ───
-    - name: Install Node deps
-      run: npm install --no-save @stellar/stellar-sdk socks-proxy-agent axios
+      - name: Install Node deps
+        run: npm install --no-save @stellar/stellar-sdk socks-proxy-agent axios
 
-    # ─── Run Script ───
-    - name: Run funding script
-      run: node friendbot_load.mjs
-      env:
-        TOTAL_RUNS:        ${{ github.event.inputs.runs_per_job }}
-        BATCH_SIZE:        ${{ github.event.inputs.batch_size }}
-        PER_REQ_DELAY_MS:  "3"
-        MAX_RETRIES:       "3"
+      - name: Prepare output folders
+        shell: bash
+        run: mkdir -p output/accounts output/findings
 
-    # ─── Move Result Files ───
-    - name: Move result files (Linux/macOS)
-      if: runner.os != 'Windows'
-      shell: bash
-      run: |
-        mkdir -p output/accounts output/findings
-        if [ -f stellar_accounts_output.json ]; then
-          mv stellar_accounts_output.json output/accounts/${{ matrix.os }}-${{ matrix.job_id }}.json
-        fi
-        if [ -f suspicious_futurenet_accounts.json ]; then
-          mv suspicious_futurenet_accounts.json output/findings/${{ matrix.os }}-${{ matrix.job_id }}.json
-        fi
+      - name: Run simulation
+        run: node friendbot_load.mjs
+        env:
+          TOTAL_RUNS:        ${{ github.event.inputs.runs_per_job }}
+          BATCH_SIZE:        ${{ github.event.inputs.batch_size }}
+          PER_REQ_DELAY_MS:  "3"
+          MAX_RETRIES:       "3"
 
-    - name: Move result files (Windows)
-      if: runner.os == 'Windows'
-      shell: pwsh
-      run: |
-        New-Item -ItemType Directory -Force -Path output\accounts, output\findings | Out-Null
-        if (Test-Path stellar_accounts_output.json) {
-          Move-Item stellar_accounts_output.json output\accounts\${{ matrix.os }}-${{ matrix.job_id }}.json
-        }
-        if (Test-Path suspicious_futurenet_accounts.json) {
-          Move-Item suspicious_futurenet_accounts.json output\findings\${{ matrix.os }}-${{ matrix.job_id }}.json
-        }
+      - name: Store artifacts (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          [ -f stellar_accounts_output.json ] && mv stellar_accounts_output.json output/accounts/${{ matrix.os }}-${{ matrix.job_id }}.json
+          [ -f suspicious_futurenet_accounts.json ] && mv suspicious_futurenet_accounts.json output/findings/${{ matrix.os }}-${{ matrix.job_id }}.json || true
 
-    # ─── Upload Artifacts ───
-    - name: Upload results
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: run-${{ github.run_id }}-${{ matrix.os }}-${{ matrix.job_id }}
-        path: |
-          output/accounts/${{ matrix.os }}-${{ matrix.job_id }}.json
-          output/findings/${{ matrix.os }}-${{ matrix.job_id }}.json
-        if-no-files-found: warn
+      - name: Store artifacts (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (Test-Path stellar_accounts_output.json) {
+            Move-Item stellar_accounts_output.json output/accounts/${{ matrix.os }}-${{ matrix.job_id }}.json
+          }
+          if (Test-Path suspicious_futurenet_accounts.json) {
+            Move-Item suspicious_futurenet_accounts.json output/findings/${{ matrix.os }}-${{ matrix.job_id }}.json
+          }
+
+      - name: Upload output
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.os }}-${{ matrix.job_id }}
+          path: output/
 
   merge_results:
-    if: always()
-    needs: jobs
     runs-on: ubuntu-latest
+    needs: jobs
+    if: always()
     steps:
-      - name: Download all artifacts
+      - uses: actions/checkout@v4
+
+      - name: Download all job artifacts
         uses: actions/download-artifact@v4
         with:
           path: merged_artifacts
 
-      - name: Show merged result file tree
-        run: ls -R merged_artifacts
+      - name: Merge JSON outputs
+        shell: bash
+        run: |
+          mkdir -p final_output
+          echo '[]' > final_output/merged_results.json
+          find merged_artifacts -name "*.json" | while read f; do
+            jq -s '.[0] + .[1]' final_output/merged_results.json "$f" > tmp.json
+            mv tmp.json final_output/merged_results.json
+          done
+          jq '[.[] | select(.futurenet | type == "object") | select((.futurenet | keys) | any(. != "XLM" and startswith("error") | not))]' \
+            final_output/merged_results.json > final_output/merged_findings.json
+
+      - name: Upload merged results
+        uses: actions/upload-artifact@v4
+        with:
+          name: merged-results
+          path: final_output/
