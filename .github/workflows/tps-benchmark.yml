@@ -1,7 +1,7 @@
 name: TPS Benchmark
 
 on:
-  workflow_dispatch:  # Manual trigger 
+  workflow_dispatch:  # Manual trigger
   schedule:
     - cron: '0 * * * *'
 
@@ -23,13 +23,26 @@ jobs:
         with:
           node-version: '20'
 
-      - name: 📦 Install dependencies
-        run: npm install axios @stellar/stellar-sdk
+      - name: 🧪 Install Tor
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tor
+          tor --version
+
+      - name: ⚙️ Configure Tor to use port 3000
+        run: |
+          echo "SocksPort 3000" > torrc
+          sudo tor -f torrc > tor.log 2>&1 &
+          sleep 10
+          netstat -an | grep 3000 || (echo "❌ Tor did not start on port 3000!" && exit 1)
+
+      - name: 📦 Install Node dependencies
+        run: npm install axios socks-proxy-agent @stellar/stellar-sdk
 
       - name: 🚀 Run TPS benchmark
         run: node tps_benchmark.js
 
-      - name: 📄 Save results (optional)
+      - name: 📄 Save results
         if: always()
         uses: actions/upload-artifact@v4
         with:
