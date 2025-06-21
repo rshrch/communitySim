@@ -40,7 +40,7 @@ jobs:
     - name: Install Node deps
       run: npm install --no-save @stellar/stellar-sdk socks-proxy-agent axios
 
-    # ──────── Tor Setup per OS ────────
+    # ──────── Tor Setup ────────
 
     - name: Start Tor (Linux)
       if: runner.os == 'Linux'
@@ -83,7 +83,7 @@ jobs:
         Write-Error "Tor never opened port 3000"
         exit 1
 
-    # ──────── Output Folder Creation ────────
+    # ──────── Output Folder Setup ────────
 
     - name: Create output folders (Linux/macOS)
       if: runner.os != 'Windows'
@@ -96,7 +96,7 @@ jobs:
         New-Item -ItemType Directory -Force -Path output\accounts | Out-Null
         New-Item -ItemType Directory -Force -Path output\findings | Out-Null
 
-    # ──────── Run Wallet Funding Script ────────
+    # ──────── Run Script ────────
 
     - name: Run funder script
       run: node friendbot_load.mjs > nul
@@ -106,13 +106,18 @@ jobs:
         PER_REQ_DELAY_MS:  "3"
         MAX_RETRIES:       "3"
 
-    # ──────── Move Results into Output ────────
+    # ──────── Move Files ────────
 
     - name: Move result files (Linux/macOS)
       if: runner.os != 'Windows'
       run: |
-        [ -f stellar_accounts_output.json ] && mv stellar_accounts_output.json output/accounts/${{ matrix.os }}-${{ matrix.job_id }}.json
-        [ -f suspicious_futurenet_accounts.json ] && mv suspicious_futurenet_accounts.json output/findings/${{ matrix.os }}-${{ matrix.job_id }}.json
+        if [ -f stellar_accounts_output.json ]; then
+          mv stellar_accounts_output.json output/accounts/${{ matrix.os }}-${{ matrix.job_id }}.json
+        fi
+
+        if [ -f suspicious_futurenet_accounts.json ]; then
+          mv suspicious_futurenet_accounts.json output/findings/${{ matrix.os }}-${{ matrix.job_id }}.json
+        fi
 
     - name: Move result files (Windows)
       if: runner.os == 'Windows'
@@ -125,13 +130,11 @@ jobs:
           Move-Item suspicious_futurenet_accounts.json output\findings\${{ matrix.os }}-${{ matrix.job_id }}.json
         }
 
-    - name: Upload job output
+    - name: Upload output for merging
       uses: actions/upload-artifact@v4
       with:
         name: outputs-${{ matrix.os }}-${{ matrix.job_id }}
         path: output/
-
-  # ──────── Merge Results from All Jobs ────────
 
   merge_results:
     needs: wallet_funding
