@@ -15,8 +15,9 @@ on:
     - cron: '*/16 * * * *'
 
 jobs:
-  job:
+  jobs:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         job_id: [1, 2, 3, 4, 5]
@@ -29,29 +30,24 @@ jobs:
       with:
         node-version: 20
 
-    - name: Cache Node modules
-      uses: actions/cache@v4
-      with:
-        path: ~/.npm
-        key: ${{ runner.os }}-npm-${{ hashFiles('**/friendbot_load.mjs') }}
-        restore-keys: |
-          ${{ runner.os }}-npm-
-
-    - name: Install Node deps
-      run: npm install --no-save @stellar/stellar-sdk socks-proxy-agent axios
-
-    # ──────── Tor Setup ────────
-
-    - name: Start Tor (Linux)
+    # ─── Tor Setup ───
+    - name: Start Tor (Ubuntu)
       if: runner.os == 'Linux'
       shell: bash
       run: |
         sudo apt-get update -qq
         sudo apt-get install -y tor netcat-openbsd
         sudo systemctl stop tor || true
-        mkdir -p "$HOME/tor_data"
-        tor --RunAsDaemon 1 --DataDirectory "$HOME/tor_data" --SocksPort 3000 --MaxCircuitDirtiness 0
-        for i in {1..60}; do nc -z 127.0.0.1 3000 && exit 0; sleep 1; done
+        TOR_DATA="$HOME/tor_data"
+        mkdir -p "$TOR_DATA"
+        tor --RunAsDaemon 1 \
+            --DataDirectory "$TOR_DATA" \
+            --SocksPort 3000 \
+            --MaxCircuitDirtiness 0
+        for i in {1..60}; do
+          nc -z 127.0.0.1 3000 && exit 0
+          sleep 1
+        done
         echo "Tor never opened port 3000" >&2
         exit 1
 
@@ -60,9 +56,16 @@ jobs:
       shell: bash
       run: |
         brew install tor netcat
-        mkdir -p "$HOME/tor_data"
-        tor --RunAsDaemon 1 --DataDirectory "$HOME/tor_data" --SocksPort 3000 --MaxCircuitDirtiness 0
-        for i in {1..60}; do nc -z 127.0.0.1 3000 && exit 0; sleep 1; done
+        TOR_DATA="$HOME/tor_data"
+        mkdir -p "$TOR_DATA"
+        tor --RunAsDaemon 1 \
+            --DataDirectory "$TOR_DATA" \
+            --SocksPort 3000 \
+            --MaxCircuitDirtiness 0
+        for i in {1..60}; do
+          nc -z 127.0.0.1 3000 && exit 0
+          sleep 1
+        done
         echo "Tor never opened port 3000" >&2
         exit 1
 
@@ -73,7 +76,11 @@ jobs:
         choco install tor --no-progress -y
         $data = "$env:USERPROFILE\tor_data"
         New-Item -ItemType Directory -Path $data -Force | Out-Null
-        Start-Process -FilePath tor -ArgumentList @("--SocksPort","3000","--DataDirectory",$data,"--MaxCircuitDirtiness","0") -WindowStyle Hidden
+        Start-Process -FilePath tor -ArgumentList @(
+          "--SocksPort","3000",
+          "--DataDirectory",$data,
+          "--MaxCircuitDirtiness","0"
+        ) -WindowStyle Hidden
         $tries = 0
         while ($tries -lt 60) {
           if ((Test-NetConnection -ComputerName 127.0.0.1 -Port 3000).TcpTestSucceeded) { exit 0 }
@@ -83,38 +90,28 @@ jobs:
         Write-Error "Tor never opened port 3000"
         exit 1
 
-    # ──────── Output Folder Setup ────────
+    # ─── Node Setup ───
+    - name: Install Node deps
+      run: npm install --no-save @stellar/stellar-sdk socks-proxy-agent axios
 
-    - name: Create output folders (Linux/macOS)
-      if: runner.os != 'Windows'
-      run: mkdir -p output/accounts output/findings
-
-    - name: Create output folders (Windows)
-      if: runner.os == 'Windows'
-      shell: pwsh
-      run: |
-        New-Item -ItemType Directory -Force -Path output\accounts | Out-Null
-        New-Item -ItemType Directory -Force -Path output\findings | Out-Null
-
-    # ──────── Run Script ────────
-
-    - name: Run funder script
-      run: node friendbot_load.mjs > nul
+    # ─── Run Simulation ───
+    - name: Run funding script
+      run: node friendbot_load.mjs
       env:
         TOTAL_RUNS:        ${{ github.event.inputs.runs_per_job }}
         BATCH_SIZE:        ${{ github.event.inputs.batch_size }}
         PER_REQ_DELAY_MS:  "3"
         MAX_RETRIES:       "3"
 
-    # ──────── Move Files ────────
-
+    # ─── Move Output Files ───
     - name: Move result files (Linux/macOS)
       if: runner.os != 'Windows'
+      shell: bash
       run: |
+        mkdir -p output/accounts output/findings
         if [ -f stellar_accounts_output.json ]; then
           mv stellar_accounts_output.json output/accounts/${{ matrix.os }}-${{ matrix.job_id }}.json
         fi
-
         if [ -f suspicious_futurenet_accounts.json ]; then
           mv suspicious_futurenet_accounts.json output/findings/${{ matrix.os }}-${{ matrix.job_id }}.json
         fi
@@ -123,6 +120,7 @@ jobs:
       if: runner.os == 'Windows'
       shell: pwsh
       run: |
+        New-Item -ItemType Directory -Force -Path output\accounts, output\findings | Out-Null
         if (Test-Path stellar_accounts_output.json) {
           Move-Item stellar_accounts_output.json output\accounts\${{ matrix.os }}-${{ matrix.job_id }}.json
         }
@@ -130,45 +128,22 @@ jobs:
           Move-Item suspicious_futurenet_accounts.json output\findings\${{ matrix.os }}-${{ matrix.job_id }}.json
         }
 
-    - name: Upload output for merging
+    - name: Upload results
       uses: actions/upload-artifact@v4
       with:
-        name: outputs-${{ matrix.os }}-${{ matrix.job_id }}
-        path: output/
+        name: run-${{ matrix.os }}-${{ matrix.job_id }}
+        path: |
+          output/accounts/${{ matrix.os }}-${{ matrix.job_id }}.json
+          output/findings/${{ matrix.os }}-${{ matrix.job_id }}.json
+        if-no-files-found: ignore
 
   merge_results:
-    needs: wallet_funding
+    if: always()
+    needs: jobs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: all_outputs
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
 
-      - name: Merge all JSON output
-        run: |
-          mkdir -p merged
-          echo "[" > merged/all_accounts.json
-          first=1
-          for file in all_outputs/**/accounts/*.json; do
-            if [ $first -eq 0 ]; then echo "," >> merged/all_accounts.json; fi
-            cat "$file" >> merged/all_accounts.json
-            first=0
-          done
-          echo "]" >> merged/all_accounts.json
-
-          echo "[" > merged/findings.json
-          first=1
-          for file in all_outputs/**/findings/*.json; do
-            if [ -s "$file" ]; then
-              if [ $first -eq 0 ]; then echo "," >> merged/findings.json; fi
-              cat "$file" >> merged/findings.json
-              first=0
-            fi
-          done
-          echo "]" >> merged/findings.json
-
-      - name: Upload merged results
-        uses: actions/upload-artifact@v4
-        with:
-          name: merged-results
-          path: merged/
+      - name: Display results tree
+        run: ls -R
