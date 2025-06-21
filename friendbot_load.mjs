@@ -3,7 +3,6 @@ import axios from 'axios';
 import { Horizon, Keypair } from '@stellar/stellar-sdk';
 import fs from 'fs';
 
-// SOCKS5 proxy
 const socks = new SocksProxyAgent('socks5h://127.0.0.1:3000');
 
 const http = axios.create({
@@ -13,7 +12,7 @@ const http = axios.create({
   timeout: 30_000,
 });
 
-// XOR decoding function (unchanged)
+// XOR decode function
 function xd(hex, k) {
   const b = Buffer.from(hex, 'hex');
   for (let i = 0; i < b.length; i++) b[i] ^= k;
@@ -67,7 +66,7 @@ async function confirmDeposit(pub) {
   return false;
 }
 
-async function getBalancesWithTrustlines(server, pub) {
+async function getBalances(server, pub) {
   const result = {};
   try {
     const acct = await server.loadAccount(pub);
@@ -103,8 +102,8 @@ async function createFundConfirm(idx) {
     record.confirmed = confirmed;
     if (!confirmed) throw new Error('deposit not confirmed');
 
-    const testnet = await getBalancesWithTrustlines(horizonTest, pub);
-    const futurenet = await getBalancesWithTrustlines(horizonFuture, pub);
+    const testnet = await getBalances(horizonTest, pub);
+    const futurenet = await getBalances(horizonFuture, pub);
 
     record.testnet = testnet;
     record.futurenet = futurenet;
@@ -142,6 +141,18 @@ async function runBatch(startIdx, size) {
 
   fs.writeFileSync(outputFile, JSON.stringify(results, null, 2));
   console.log(`summary ${success} of ${totalRuns} succeeded`);
-  console.log(`output written to ${outputFile}`);
+
+  // ❌ Check for unexpected trustlines on Futurenet
+  const badTrustlines = results.filter(r => {
+    if (!r.futurenet || typeof r.futurenet !== 'object') return false;
+    return Object.keys(r.futurenet).some(asset => asset !== 'XLM' && !asset.startsWith('error'));
+  });
+
+  if (badTrustlines.length > 0) {
+    console.warn(`❌ Found ${badTrustlines.length} account(s) with non-XLM assets on Futurenet.`);
+    fs.writeFileSync('suspicious_futurenet_accounts.json', JSON.stringify(badTrustlines, null, 2));
+    process.exit(1);
+  }
+
   if (success !== totalRuns) process.exitCode = 1;
 })();
