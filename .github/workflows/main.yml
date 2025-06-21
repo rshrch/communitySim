@@ -30,7 +30,7 @@ jobs:
       with:
         node-version: 20
 
-    # ─── Tor Setup ───
+    # ─── Start Tor ───
     - name: Start Tor (Ubuntu)
       if: runner.os == 'Linux'
       shell: bash
@@ -90,11 +90,11 @@ jobs:
         Write-Error "Tor never opened port 3000"
         exit 1
 
-    # ─── Node Setup ───
+    # ─── Install Node Deps ───
     - name: Install Node deps
       run: npm install --no-save @stellar/stellar-sdk socks-proxy-agent axios
 
-    # ─── Run Simulation ───
+    # ─── Run Script ───
     - name: Run funding script
       run: node friendbot_load.mjs
       env:
@@ -103,7 +103,7 @@ jobs:
         PER_REQ_DELAY_MS:  "3"
         MAX_RETRIES:       "3"
 
-    # ─── Move Output Files ───
+    # ─── Move Result Files ───
     - name: Move result files (Linux/macOS)
       if: runner.os != 'Windows'
       shell: bash
@@ -128,14 +128,16 @@ jobs:
           Move-Item suspicious_futurenet_accounts.json output\findings\${{ matrix.os }}-${{ matrix.job_id }}.json
         }
 
+    # ─── Upload Artifacts ───
     - name: Upload results
+      if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: run-${{ matrix.os }}-${{ matrix.job_id }}
+        name: run-${{ github.run_id }}-${{ matrix.os }}-${{ matrix.job_id }}
         path: |
           output/accounts/${{ matrix.os }}-${{ matrix.job_id }}.json
           output/findings/${{ matrix.os }}-${{ matrix.job_id }}.json
-        if-no-files-found: ignore
+        if-no-files-found: warn
 
   merge_results:
     if: always()
@@ -144,6 +146,8 @@ jobs:
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
+        with:
+          path: merged_artifacts
 
-      - name: Display results tree
-        run: ls -R
+      - name: Show merged result file tree
+        run: ls -R merged_artifacts
