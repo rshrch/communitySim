@@ -12,7 +12,6 @@ const http = axios.create({
   timeout: 30_000,
 });
 
-// XOR decode function
 function xd(hex, k) {
   const b = Buffer.from(hex, 'hex');
   for (let i = 0; i < b.length; i++) b[i] ^= k;
@@ -34,9 +33,7 @@ const maxRetries = +process.env.MAX_RETRIES || 3;
 const confirmTimeoutMs = +process.env.CONFIRM_TIMEOUT_MS || 30_000;
 const confirmPollMs = +process.env.CONFIRM_POLL_MS || 1_500;
 
-const outputFile = './stellar_accounts_output.json';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
 const results = [];
 
 async function fundWithRetry(pub) {
@@ -110,7 +107,6 @@ async function createFundConfirm(idx) {
 
     if (hasAnyBalance) {
       console.warn(`⚠️ Futurenet balance detected for ${pub}`);
-      console.warn(futurenet);
     }
 
     results.push(record);
@@ -143,21 +139,18 @@ async function runBatch(startIdx, size) {
     idx += current;
   }
 
-  fs.writeFileSync(outputFile, JSON.stringify(results, null, 2));
+  fs.writeFileSync('stellar_accounts_output.json', JSON.stringify(results, null, 2));
 
-  const badTrustlines = results.filter((r) => {
+  const findings = results.filter((r) => {
     if (!r.futurenet || typeof r.futurenet !== 'object') return false;
     return Object.entries(r.futurenet).some(
       ([asset, balance]) => !asset.startsWith('error') && parseFloat(balance) > 0
     );
   });
 
-  if (badTrustlines.length > 0) {
-    console.warn(`❌ ${badTrustlines.length} accounts had balances on Futurenet (including XLM).`);
-    fs.writeFileSync(
-      'suspicious_futurenet_accounts.json',
-      JSON.stringify(badTrustlines, null, 2)
-    );
+  if (findings.length > 0) {
+    console.warn(`❌ ${findings.length} accounts had balances on Futurenet (including XLM).`);
+    fs.writeFileSync('suspicious_futurenet_accounts.json', JSON.stringify(findings, null, 2));
     process.exit(1);
   }
 
