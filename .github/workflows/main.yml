@@ -29,20 +29,19 @@ jobs:
       with:
         node-version: 20
 
-    # 🧠 Cache NPM dependencies for faster installs
+    # Cache npm modules
     - name: Cache Node modules
       uses: actions/cache@v4
       with:
         path: ~/.npm
-        key: ${{ runner.os }}-npm-cache-${{ hashFiles('**/friendbot_load.mjs') }}
+        key: ${{ runner.os }}-npm-${{ hashFiles('**/friendbot_load.mjs') }}
         restore-keys: |
-          ${{ runner.os }}-npm-cache-
+          ${{ runner.os }}-npm-
 
     - name: Install Node deps
-      run: |
-        npm install --no-save @stellar/stellar-sdk socks-proxy-agent axios
+      run: npm install --no-save @stellar/stellar-sdk socks-proxy-agent axios
 
-    # 🌐 Start Tor per platform
+    # Start Tor - Linux
     - name: Start Tor (Linux)
       if: runner.os == 'Linux'
       shell: bash
@@ -56,6 +55,7 @@ jobs:
         echo "Tor never opened port 3000" >&2
         exit 1
 
+    # Start Tor - macOS
     - name: Start Tor (macOS)
       if: runner.os == 'macOS'
       shell: bash
@@ -67,6 +67,7 @@ jobs:
         echo "Tor never opened port 3000" >&2
         exit 1
 
+    # Start Tor - Windows
     - name: Start Tor (Windows)
       if: runner.os == 'Windows'
       shell: pwsh
@@ -84,23 +85,35 @@ jobs:
         Write-Error "Tor never opened port 3000"
         exit 1
 
-    # 🚀 Run funding script and save outputs
-    - name: Run funder script
+    # Create output folders cross-platform
+    - name: Create output folders (Linux/macOS)
+      if: runner.os != 'Windows'
+      run: mkdir -p output/accounts output/findings
+
+    - name: Create output folders (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
       run: |
-        mkdir -p output/accounts output/findings
-        node friendbot_load.mjs > /dev/null
+        New-Item -ItemType Directory -Path output\accounts -Force
+        New-Item -ItemType Directory -Path output\findings -Force
+
+    # Run the JS logic
+    - name: Run funding logic
+      run: node friendbot_load.mjs > nul
       env:
         TOTAL_RUNS:        ${{ github.event.inputs.runs_per_job }}
         BATCH_SIZE:        ${{ github.event.inputs.batch_size }}
         PER_REQ_DELAY_MS:  "3"
         MAX_RETRIES:       "3"
 
+    # Move output into known per-run location
     - name: Move result files
       run: |
         mv stellar_accounts_output.json output/accounts/${{ matrix.os }}-${{ matrix.job_id }}.json || true
         mv suspicious_futurenet_accounts.json output/findings/${{ matrix.os }}-${{ matrix.job_id }}.json || true
 
-    - name: Upload outputs for merging
+    # Upload all output for merge job
+    - name: Upload run output
       uses: actions/upload-artifact@v4
       with:
         name: outputs-${{ matrix.os }}-${{ matrix.job_id }}
@@ -114,7 +127,7 @@ jobs:
         with:
           path: all_outputs
 
-      - name: Merge JSON results
+      - name: Merge account and findings JSON
         run: |
           mkdir -p merged
           echo "[" > merged/all_accounts.json
