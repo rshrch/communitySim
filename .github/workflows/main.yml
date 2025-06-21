@@ -1,5 +1,6 @@
 name: communitySimulation
 
+
 on:
   workflow_dispatch:
     inputs:
@@ -92,12 +93,16 @@ jobs:
       - name: Print results if accounts file exists
         if: runner.os != 'Windows'
         run: |
-          [ -f stellar_accounts_output.json ] && cat stellar_accounts_output.json
+          if [ -f stellar_accounts_output.json ]; then
+            cat stellar_accounts_output.json
+          fi
 
       - name: Print findings if suspicious file exists
         if: runner.os != 'Windows'
         run: |
-          [ -f suspicious_futurenet_accounts.json ] && cat suspicious_futurenet_accounts.json
+          if [ -f suspicious_futurenet_accounts.json ]; then
+            cat suspicious_futurenet_accounts.json
+          fi
 
       - name: Print results if accounts file exists (Windows)
         if: runner.os == 'Windows'
