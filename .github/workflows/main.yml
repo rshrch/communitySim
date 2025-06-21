@@ -6,11 +6,11 @@ on:
     inputs:
       runs_per_job:
         description: "wallets each job will fund"
-        default: "1000"
+        default: "3000"
         required: true
       batch_size:
         description: "concurrent requests inside a job"
-        default: "50"
+        default: "500"
         required: true
   schedule:
     - cron: '*/16 * * * *'
