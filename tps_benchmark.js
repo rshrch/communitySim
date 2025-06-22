@@ -82,17 +82,14 @@ async function waitForBalance(pubkey, min = 1) {
 
 async function createAndSubmitPayments(funder, funderKey, count = 100) {
   const account = await server.loadAccount(funder);
-  let currentSeq = BigInt(account.sequence);
-
+  const baseSeq = account.sequence;
   const txs = [];
 
   for (let i = 0; i < count; i++) {
     const keypair = Keypair.random();
-    currentSeq += 1n;
+    const acc = new Account(funder, (BigInt(baseSeq) + BigInt(i + 1)).toString());
 
-    const tempAccount = new Account(funder, currentSeq.toString());
-
-    const tx = new TransactionBuilder(tempAccount, {
+    const tx = new TransactionBuilder(acc, {
       fee: BASE_FEE,
       networkPassphrase: Networks.TESTNET,
     })
@@ -107,16 +104,18 @@ async function createAndSubmitPayments(funder, funderKey, count = 100) {
     txs.push(tx);
   }
 
-  const submitted = await Promise.allSettled(
-    txs.map(async tx => {
-      try {
-        const res = await server.submitTransaction(tx);
-        return { success: true, hash: res.hash };
-      } catch (e) {
-        return { success: false, error: e.response?.data || e.message };
-      }
-    })
-  );
+  const submitted = [];
+
+  for (const tx of txs) {
+    try {
+      const res = await server.submitTransaction(tx);
+      submitted.push({ success: true, hash: res.hash });
+    } catch (e) {
+      submitted.push({ success: false, error: e.response?.data || e.message });
+    }
+
+    await sleep(200); // Delay helps sequence ordering across Horizon
+  }
 
   return submitted;
 }
@@ -136,14 +135,14 @@ async function createAndSubmitPayments(funder, funderKey, count = 100) {
     const balance = await waitForBalance(funder, 10000);
     console.log(`🟢 Funder account confirmed with ${balance} XLM`);
 
-    console.log(`📥 Loaded funder account`);
+    console.log(`📥 Submitting with funder 1`);
 
     const start = Date.now();
     const results = await createAndSubmitPayments(funder, funderKey, 100);
     const duration = (Date.now() - start) / 1000;
 
     const success = results.filter(r => r.success).length;
-    const failed = results.length - success;
+    const failed = results.filter(r => !r.success).length;
 
     const tps = (success / duration).toFixed(2);
 
