@@ -82,12 +82,12 @@ async function waitForBalance(pubkey, min = 1) {
 
 async function createAndSubmitPayments(funder, funderKey, count = 100) {
   const account = await server.loadAccount(funder);
-  const baseSeq = account.sequence;
+  const baseSeq = BigInt(account.sequence);
   const txs = [];
 
   for (let i = 0; i < count; i++) {
     const keypair = Keypair.random();
-    const acc = new Account(funder, (BigInt(baseSeq) + BigInt(i + 1)).toString());
+    const acc = new Account(funder, (baseSeq + BigInt(i + 1)).toString());
 
     const tx = new TransactionBuilder(acc, {
       fee: BASE_FEE,
@@ -106,15 +106,16 @@ async function createAndSubmitPayments(funder, funderKey, count = 100) {
 
   const submitted = [];
 
-  for (const tx of txs) {
+  for (const [i, tx] of txs.entries()) {
     try {
       const res = await server.submitTransaction(tx);
       submitted.push({ success: true, hash: res.hash });
     } catch (e) {
-      submitted.push({ success: false, error: e.response?.data || e.message });
+      const err = e.response?.data?.extras?.result_codes || e.response?.data || e.message;
+      console.error(`❌ TX ${i + 1} failed:`, err);
+      submitted.push({ success: false, error: err });
     }
-
-    await sleep(200); // Delay helps sequence ordering across Horizon
+    await sleep(50); // throttle slightly to reduce burst issues
   }
 
   return submitted;
@@ -134,16 +135,14 @@ async function createAndSubmitPayments(funder, funderKey, count = 100) {
 
     const balance = await waitForBalance(funder, 10000);
     console.log(`🟢 Funder account confirmed with ${balance} XLM`);
-
-    console.log(`📥 Submitting with funder 1`);
+    console.log(`📥 Loaded funder account`);
 
     const start = Date.now();
     const results = await createAndSubmitPayments(funder, funderKey, 100);
     const duration = (Date.now() - start) / 1000;
 
     const success = results.filter(r => r.success).length;
-    const failed = results.filter(r => !r.success).length;
-
+    const failed = results.length - success;
     const tps = (success / duration).toFixed(2);
 
     const stats = {
