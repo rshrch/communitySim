@@ -11,20 +11,21 @@ import {
   BASE_FEE
 } from '@stellar/stellar-sdk';
 
-// === Helper Functions ===
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// XOR decode function
 function xd(hex, k) {
   const b = Buffer.from(hex, 'hex');
   for (let i = 0; i < b.length; i++) b[i] ^= k;
   return b.toString();
 }
-
-// === Constants ===
 const k = 0x55;
-const HORIZON_TEST = xd('3d212125266f7a7a3d3a273c2f3a3b78213026213b30217b262130393934277b3a2732', k); // https://horizon-testnet.stellar.org
-const FRIEND_BOT   = xd('3d212125266f7a7a33273c303b31373a217b262130393934277b3a2732', k); // https://friendbot.stellar.org
 
+// Obfuscated URLs
+const HORIZON_TEST = xd('3d212125266f7a7a3d3a273c2f3a3b78213026213b30217b262130393934277b3a2732', k);
+const FRIEND_BOT   = xd('3d212125266f7a7a33273c303b31373a217b262130393934277b3a2732', k);        
+
+// SOCKS5 proxy on port 3000
 const socks = new SocksProxyAgent('socks5h://127.0.0.1:3000');
 const http = axios.create({
   httpAgent: socks,
@@ -32,15 +33,14 @@ const http = axios.create({
   proxy: false,
   timeout: 30000,
 });
-
 const horizon = new Horizon.Server(HORIZON_TEST, { agent: socks });
 
-// === Benchmark Configuration ===
+// Config
 const STARTING_BALANCE = '2.5';
 const DURATION_SEC = 10;
 const PARALLEL_TXS = 100;
 
-// === Tor Proxy Readiness Check ===
+// Wait for Tor to listen
 function waitForPort(port = 3000, timeout = 10000) {
   return new Promise((resolve, reject) => {
     const start = Date.now();
@@ -59,7 +59,7 @@ function waitForPort(port = 3000, timeout = 10000) {
   });
 }
 
-// === Confirm Funder Account via Horizon ===
+// Confirm funder account via Horizon
 async function waitForFunderConfirmation(pubkey, timeout = 15000) {
   const start = Date.now();
   while (Date.now() - start < timeout) {
@@ -78,7 +78,7 @@ async function waitForFunderConfirmation(pubkey, timeout = 15000) {
   throw new Error('❌ Timeout: Funder account never confirmed by Horizon');
 }
 
-// === Friendbot Funding ===
+// Fund account using Friendbot
 async function fundViaFriendbot(pubkey) {
   const url = `${FRIEND_BOT}/?addr=${encodeURIComponent(pubkey)}`;
   try {
@@ -91,7 +91,7 @@ async function fundViaFriendbot(pubkey) {
   }
 }
 
-// === Create Transaction ===
+// Create a createAccount transaction
 function createTx(sourceAccount, funder, dest, sequence) {
   const tx = new TransactionBuilder(
     { accountId: funder.publicKey(), sequence: sequence.toString() },
@@ -113,7 +113,7 @@ function createTx(sourceAccount, funder, dest, sequence) {
   return tx;
 }
 
-// === Run Benchmark ===
+// Run the TPS benchmark
 async function benchmarkTPS(funder) {
   let totalSubmitted = 0;
   let totalSuccess = 0;
@@ -126,8 +126,9 @@ async function benchmarkTPS(funder) {
     let account;
     try {
       account = await horizon.loadAccount(funder.publicKey());
+      console.log(`📥 Loaded funder account with seq: ${account.sequence}`);
     } catch (err) {
-      console.error('❌ Failed to load funder account during benchmark:', err.message);
+      console.error('❌ Failed to load funder account:', err.message);
       break;
     }
 
@@ -137,6 +138,7 @@ async function benchmarkTPS(funder) {
       const tx = createTx(account, funder, dest, sequence + BigInt(i + 1));
 
       try {
+        console.log(`🚀 Submitting TX to create account ${dest}`);
         await horizon.submitTransaction(tx);
         totalSuccess++;
       } catch (e) {
@@ -168,7 +170,7 @@ async function benchmarkTPS(funder) {
   console.log(`📁 Results written to tps_results.json`);
 }
 
-// === Main Entrypoint ===
+// Main
 (async () => {
   const funder = Keypair.random();
   console.log(`🔐 Funder Public Key: ${funder.publicKey()}`);
