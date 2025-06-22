@@ -10,34 +10,14 @@ const {
   BASE_FEE,
   Networks,
   Operation,
-  Account,
-  Horizon
+  Account
 } = StellarSdk;
 
-// === XOR Decode Helper ===
-function xd(hex, k = 0x55) {
-  const b = Buffer.from(hex, 'hex');
-  for (let i = 0; i < b.length; i++) b[i] ^= k;
-  return b.toString();
-}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// === Constants ===
-const HORIZON_TEST = xd('15653450543a2d3e151027190d202b2a58340e2f345f22340e2f191918065f2a271900', 0x55); // https://horizon-testnet.stellar.org
-const FRIEND_PREFIX = xd('15282f2f2d3a2f2f040a3e2a252b202e3b22340e2f191918065f2a27197c4c302b2b201d', 0x55); // https://friendbot.stellar.org/?addr=
-
-console.log('🛰️ Horizon endpoint:', HORIZON_TEST);
-
-const socks = new SocksProxyAgent('socks5h://127.0.0.1:3000');
-const http = axios.create({
-  httpAgent: socks,
-  httpsAgent: socks,
-  proxy: false,
-  timeout: 30000,
-});
-
-const server = new Horizon.Server(HORIZON_TEST, { agent: socks });
-
-const sleep = ms => new Promise(res => setTimeout(res, ms));
+// ✅ Use secure Horizon endpoint directly
+const HORIZON_TEST = 'https://horizon-testnet.stellar.org';
+const FRIEND_PREFIX = 'https://friendbot.stellar.org/?addr=';
 
 async function waitForProxyReady(port = 3000, host = '127.0.0.1', timeout = 10000) {
   return new Promise((resolve, reject) => {
@@ -62,6 +42,20 @@ async function waitForProxyReady(port = 3000, host = '127.0.0.1', timeout = 1000
   });
 }
 
+let socks = new SocksProxyAgent('socks5h://127.0.0.1:3000');
+function createHttp() {
+  return axios.create({
+    httpAgent: socks,
+    httpsAgent: socks,
+    proxy: false,
+    timeout: 30000,
+  });
+}
+let http = createHttp();
+
+// ✅ Use proper HTTPS and SocksProxyAgent
+const server = new StellarSdk.Horizon.Server(HORIZON_TEST, { agent: socks });
+
 async function fundAccount(pubkey) {
   const res = await http.get(FRIEND_PREFIX + encodeURIComponent(pubkey));
   return res.data.hash;
@@ -83,12 +77,12 @@ async function waitForBalance(pubkey, min = 1) {
 
 async function createAndSubmitPayments(funder, funderKey, count = 100) {
   const account = await server.loadAccount(funder);
-  const baseSeq = BigInt(account.sequence);
+  const baseSeq = account.sequence;
   const txs = [];
 
   for (let i = 0; i < count; i++) {
     const keypair = Keypair.random();
-    const acc = new Account(funder, (baseSeq + BigInt(i + 1)).toString());
+    const acc = new Account(funder, (BigInt(baseSeq) + BigInt(i + 1)).toString());
 
     const tx = new TransactionBuilder(acc, {
       fee: BASE_FEE,
@@ -106,10 +100,10 @@ async function createAndSubmitPayments(funder, funderKey, count = 100) {
   }
 
   const submitted = await Promise.allSettled(
-    txs.map((tx, idx) =>
-      server.submitTransaction(tx).catch(e => {
-        console.error(`❌ TX ${idx + 1} failed:`, e.response?.data || e.message);
-        throw e;
+    txs.map((tx, i) =>
+      server.submitTransaction(tx).catch(err => {
+        console.error(`❌ TX ${i + 1} failed:`, err.response?.data?.extras?.result_codes || err.message);
+        throw err;
       })
     )
   );
@@ -119,8 +113,9 @@ async function createAndSubmitPayments(funder, funderKey, count = 100) {
 
 (async () => {
   try {
-    console.log('🟢 Waiting for proxy...');
+    console.log('🟢 Checking SOCKS5 proxy...');
     await waitForProxyReady();
+    console.log('🟢 Proxy is ready.');
 
     const funderKey = Keypair.random();
     const funder = funderKey.publicKey();
@@ -131,6 +126,7 @@ async function createAndSubmitPayments(funder, funderKey, count = 100) {
 
     const balance = await waitForBalance(funder, 10000);
     console.log(`🟢 Funder account confirmed with ${balance} XLM`);
+
     console.log(`📥 Loaded funder account`);
 
     const start = Date.now();
@@ -138,8 +134,8 @@ async function createAndSubmitPayments(funder, funderKey, count = 100) {
     const duration = (Date.now() - start) / 1000;
 
     const success = results.filter(r => r.status === 'fulfilled').length;
-    const failed = results.length - success;
-    const tps = +(success / duration).toFixed(2);
+    const failed = results.filter(r => r.status === 'rejected').length;
+    const tps = (success / duration).toFixed(2);
 
     const stats = {
       timestamp: new Date().toISOString(),
@@ -147,7 +143,7 @@ async function createAndSubmitPayments(funder, funderKey, count = 100) {
       totalSubmitted: results.length,
       totalSuccess: success,
       totalFailed: failed,
-      tps,
+      tps: parseFloat(tps),
     };
 
     console.log('=== 📊 TPS Benchmark Results ===');
