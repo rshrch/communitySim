@@ -10,6 +10,7 @@ const {
   BASE_FEE,
   Networks,
   Operation,
+  Account
 } = StellarSdk;
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -57,7 +58,6 @@ function createHttp() {
   });
 }
 let http = createHttp();
-
 const server = new StellarSdk.Horizon.Server(HORIZON_TEST, { agent: socks });
 
 async function fundAccount(pubkey) {
@@ -80,43 +80,37 @@ async function waitForBalance(pubkey, min = 1) {
 }
 
 async function createAndSubmitPayments(funder, funderKey, count = 100) {
-  const submitted = [];
+  const account = await server.loadAccount(funder);
+  const baseSeq = BigInt(account.sequence);
+  const txs = [];
 
   for (let i = 0; i < count; i++) {
-    try {
-      const account = await server.loadAccount(funder);
+    const keypair = Keypair.random();
+    const acc = new Account(funder, (baseSeq + BigInt(i + 1)).toString());
 
-      const tx = new TransactionBuilder(account, {
-        fee: BASE_FEE,
-        networkPassphrase: Networks.TESTNET,
-      })
-        .addOperation(Operation.createAccount({
-          destination: Keypair.random().publicKey(),
-          startingBalance: '1',
-        }))
-        .setTimeout(30)
-        .build();
+    const tx = new TransactionBuilder(acc, {
+      fee: BASE_FEE,
+      networkPassphrase: Networks.TESTNET,
+    })
+      .addOperation(Operation.createAccount({
+        destination: keypair.publicKey(),
+        startingBalance: '1',
+      }))
+      .setTimeout(30)
+      .build();
 
-      tx.sign(funderKey);
-
-      const res = await server.submitTransaction(tx);
-      submitted.push({ success: true, hash: res.hash });
-    } catch (e) {
-      const err = e.response?.data?.extras?.result_codes || e.response?.data || e.message;
-      console.error(`❌ TX ${i + 1} failed:`, err);
-      submitted.push({ success: false, error: err });
-    }
-
-    await sleep(500); // Let ledgers close
+    tx.sign(funderKey);
+    txs.push(tx);
   }
 
+  const submitted = await Promise.allSettled(txs.map(tx => server.submitTransaction(tx)));
   return submitted;
 }
 
 (async () => {
   try {
-    console.log('🟢 Proxy is ready.');
     await waitForProxyReady();
+    console.log('🟢 Proxy is ready.');
 
     const funderKey = Keypair.random();
     const funder = funderKey.publicKey();
@@ -133,8 +127,9 @@ async function createAndSubmitPayments(funder, funderKey, count = 100) {
     const results = await createAndSubmitPayments(funder, funderKey, 100);
     const duration = (Date.now() - start) / 1000;
 
-    const success = results.filter(r => r.success).length;
-    const failed = results.length - success;
+    const success = results.filter(r => r.status === 'fulfilled').length;
+    const failed = results.filter(r => r.status === 'rejected').length;
+
     const tps = (success / duration).toFixed(2);
 
     const stats = {
