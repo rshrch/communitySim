@@ -1,17 +1,20 @@
-import { SocksProxyAgent } from 'socks-proxy-agent';
-import axios from 'axios';
-import fs from 'fs';
-import net from 'net';
-import pkg from '@stellar/stellar-sdk';
+#!/usr/bin/env node
+
+const { SocksProxyAgent } = require('socks-proxy-agent');
+const axios = require('axios');
+const fs = require('fs');
+const net = require('net');
+const StellarSdk = require('@stellar/stellar-sdk');
+const minimist = require('minimist');
 
 const {
   Keypair,
-  Server,
   TransactionBuilder,
+  BASE_FEE,
   Networks,
   Operation,
-  BASE_FEE
-} = pkg;
+  Account
+} = StellarSdk;
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -22,12 +25,12 @@ function xd(hex, k) {
 }
 const k = 0x55;
 
-const HORIZON_TEST = xd('3d212125266f7a7a3d3a273c2f3a3b78213026213b30217b262130393934277b3a2732', k); 
-const FRIEND_PREFIX = xd('3d212125266f7a7a33273c303b31373a217b262130393934277b3a27327a6a3431312768', k); 
+const HORIZON_TEST  = xd('3d212125266f7a7a3d3a273c2f3a3b78213026213b30217b262130393934277b3a2732', k);
+const FRIEND_PREFIX = xd('3d212125266f7a7a33273c303b31373a217b262130393934277b3a27327a6a3431312768', k);
 
-let socks = new SocksProxyAgent('socks5h://127.0.0.1:3000');
-
-const server = new Server(HORIZON_TEST, { agent: socks });
+const args = minimist(process.argv.slice(2));
+const TOTAL_TXS = parseInt(args.txs || 100);
+const FUNDERS = parseInt(args.funders || 1);
 
 async function waitForProxyReady(port = 3000, host = '127.0.0.1', timeout = 10000) {
   return new Promise((resolve, reject) => {
@@ -52,106 +55,148 @@ async function waitForProxyReady(port = 3000, host = '127.0.0.1', timeout = 1000
   });
 }
 
-async function fundAccount(pubKey) {
-  const url = FRIEND_PREFIX + encodeURIComponent(pubKey);
-  const { data } = await axios.get(url, {
+let socks = new SocksProxyAgent('socks5h://127.0.0.1:3000');
+function createHttp() {
+  return axios.create({
     httpAgent: socks,
     httpsAgent: socks,
-    timeout: 10000
+    proxy: false,
+    timeout: 30000,
   });
-  return data.hash;
+}
+let http = createHttp();
+
+const server = new StellarSdk.Horizon.Server(HORIZON_TEST, { agent: socks });
+
+async function fundAccount(pubkey) {
+  const res = await http.get(FRIEND_PREFIX + encodeURIComponent(pubkey));
+  return res.data.hash;
 }
 
-async function confirmBalance(pubKey, minBalance = 100) {
-  const timeout = Date.now() + 30000;
-  while (Date.now() < timeout) {
+async function waitForBalance(pubkey, min = 1) {
+  const start = Date.now();
+  const timeout = 20000;
+  while (Date.now() - start < timeout) {
     try {
-      const account = await server.loadAccount(pubKey);
-      const native = account.balances.find(b => b.asset_type === 'native');
-      if (native && parseFloat(native.balance) >= minBalance) return true;
-    } catch (e) {
-      if (e.response?.status !== 404) throw e;
-    }
-    await sleep(1500);
+      const acct = await server.loadAccount(pubkey);
+      const bal = acct.balances.find(b => b.asset_type === 'native');
+      if (bal && parseFloat(bal.balance) >= min) return bal.balance;
+    } catch (e) {}
+    await sleep(1000);
   }
-  return false;
+  throw new Error('Balance check timed out');
 }
 
-async function submitTx(tx) {
-  try {
-    const result = await server.submitTransaction(tx);
-    return { success: true, result };
-  } catch (e) {
-    return { success: false, error: e.response?.data || e.message };
+async function createAndSubmitPayments(funder, funderKey, count) {
+  const account = await server.loadAccount(funder);
+  const baseSeq = account.sequence;
+  const txs = [];
+  const createdAccounts = [];
+
+  for (let i = 0; i < count; i++) {
+    const newKey = Keypair.random();
+    createdAccounts.push(newKey);
+
+    const acc = new Account(funder, (BigInt(baseSeq) + BigInt(i + 1)).toString());
+
+    const tx = new TransactionBuilder(acc, {
+      fee: BASE_FEE,
+      networkPassphrase: Networks.TESTNET,
+    })
+      .addOperation(Operation.createAccount({
+        destination: newKey.publicKey(),
+        startingBalance: '1',
+      }))
+      .setTimeout(30)
+      .build();
+
+    tx.sign(funderKey);
+    txs.push(tx);
   }
+
+  const submitted = await Promise.allSettled(txs.map(tx => server.submitTransaction(tx)));
+  return { submitted, createdAccounts };
+}
+
+async function mergeBackAccounts(accounts, targetKey) {
+  const fundTxs = [];
+
+  for (let key of accounts) {
+    try {
+      const acct = await server.loadAccount(key.publicKey());
+      const tx = new TransactionBuilder(acct, {
+        fee: BASE_FEE,
+        networkPassphrase: Networks.TESTNET
+      })
+        .addOperation(Operation.accountMerge({ destination: targetKey.publicKey() }))
+        .setTimeout(30)
+        .build();
+
+      tx.sign(key);
+      fundTxs.push(tx);
+    } catch (e) {
+      continue;
+    }
+  }
+
+  return await Promise.allSettled(fundTxs.map(tx => server.submitTransaction(tx)));
 }
 
 (async () => {
-  console.log('🟢 Proxy is ready.');
-  await waitForProxyReady();
+  try {
+    console.log('🟢 Waiting for proxy...');
+    await waitForProxyReady();
+    console.log('🟢 Proxy is ready.');
 
-  // Generate and fund base account
-  const baseKeypair = Keypair.random();
-  const publicKey = baseKeypair.publicKey();
-  const secret = baseKeypair.secret();
+    const perFunder = Math.ceil(TOTAL_TXS / FUNDERS);
+    const funders = [];
 
-  console.log(`🔄 Funding account via Friendbot: ${publicKey}`);
-  const txHash = await fundAccount(publicKey);
-  console.log(`✅ Friendbot TX hash: ${txHash}`);
+    for (let i = 0; i < FUNDERS; i++) {
+      const key = Keypair.random();
+      console.log(`🔄 Funding account via Friendbot: ${key.publicKey()}`);
+      await fundAccount(key.publicKey());
+      await waitForBalance(key.publicKey(), 10000);
+      funders.push(key);
+    }
 
-  const confirmed = await confirmBalance(publicKey);
-  if (!confirmed) {
-    console.error('❌ Funder account not confirmed.');
+    const allResults = [];
+    const allAccounts = [];
+    const start = Date.now();
+
+    for (let i = 0; i < funders.length; i++) {
+      console.log(`📥 Submitting with funder ${i + 1}`);
+      const { submitted, createdAccounts } = await createAndSubmitPayments(
+        funders[i].publicKey(),
+        funders[i],
+        perFunder
+      );
+      allResults.push(...submitted);
+      allAccounts.push(...createdAccounts);
+    }
+
+    const duration = (Date.now() - start) / 1000;
+    const success = allResults.filter(r => r.status === 'fulfilled').length;
+    const failed = allResults.length - success;
+    const tps = (success / duration).toFixed(2);
+
+    console.log(`♻️ Merging ${allAccounts.length} test accounts...`);
+    await mergeBackAccounts(allAccounts, funders[0]);
+
+    const stats = {
+      timestamp: new Date().toISOString(),
+      durationSeconds: duration,
+      totalSubmitted: allResults.length,
+      totalSuccess: success,
+      totalFailed: failed,
+      tps: parseFloat(tps),
+    };
+
+    console.log('=== 📊 TPS Benchmark Results ===');
+    console.log(stats);
+    fs.writeFileSync('tps_results.json', JSON.stringify(stats, null, 2));
+    console.log('📁 Results written to tps_results.json');
+  } catch (e) {
+    console.error('❌ Error:', e.message || e);
     process.exit(1);
   }
-
-  console.log('🟢 Funder account confirmed with 10000.0000000 XLM');
-
-  // Load account and prep TXs
-  const funder = await server.loadAccount(publicKey);
-  console.log('📥 Loaded funder account');
-
-  const startTime = Date.now();
-  const ops = [];
-  const targets = [];
-
-  const COUNT = 100;
-
-  for (let i = 0; i < COUNT; i++) {
-    const target = Keypair.random();
-    targets.push(target);
-
-    ops.push(Operation.createAccount({
-      destination: target.publicKey(),
-      startingBalance: '1'
-    }));
-  }
-
-  let tx = new TransactionBuilder(funder, {
-    fee: BASE_FEE * COUNT,
-    networkPassphrase: Networks.TESTNET
-  });
-
-  for (const op of ops) tx.addOperation(op);
-
-  tx = tx.setTimeout(30).build();
-  tx.sign(baseKeypair);
-
-  const result = await submitTx(tx);
-  const duration = (Date.now() - startTime) / 1000;
-
-  const stats = {
-    timestamp: new Date().toISOString(),
-    durationSeconds: duration,
-    totalSubmitted: COUNT,
-    totalSuccess: result.success ? COUNT : 0,
-    totalFailed: result.success ? 0 : COUNT,
-    tps: result.success ? (COUNT / duration).toFixed(2) : 0
-  };
-
-  console.log('=== 📊 TPS Benchmark Results ===');
-  console.log(stats);
-
-  fs.writeFileSync('tps_results.json', JSON.stringify(stats, null, 2));
-  console.log('📁 Results written to tps_results.json');
 })();
