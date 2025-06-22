@@ -10,20 +10,34 @@ const {
   BASE_FEE,
   Networks,
   Operation,
-  Account
+  Account,
+  Horizon
 } = StellarSdk;
 
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-
+// === XOR Decode Helper ===
 function xd(hex, k = 0x55) {
   const b = Buffer.from(hex, 'hex');
   for (let i = 0; i < b.length; i++) b[i] ^= k;
   return b.toString();
 }
 
-// Obfuscated URL for 'https://horizon-testnet.stellar.org' with XOR key 0x55
-const HORIZON_TEST = xd('15653450543a2d3e151027190d202b2a58340e2f345f22340e2f191918065f2a271900');
-const FRIEND_PREFIX = xd('3d212125266f7a7a33273c303b31373a217b262130393934277b3a27327a6a3431312768', 0x55);
+// === Constants ===
+const HORIZON_TEST = xd('15653450543a2d3e151027190d202b2a58340e2f345f22340e2f191918065f2a271900', 0x55); // https://horizon-testnet.stellar.org
+const FRIEND_PREFIX = xd('15282f2f2d3a2f2f040a3e2a252b202e3b22340e2f191918065f2a27197c4c302b2b201d', 0x55); // https://friendbot.stellar.org/?addr=
+
+console.log('🛰️ Horizon endpoint:', HORIZON_TEST);
+
+const socks = new SocksProxyAgent('socks5h://127.0.0.1:3000');
+const http = axios.create({
+  httpAgent: socks,
+  httpsAgent: socks,
+  proxy: false,
+  timeout: 30000,
+});
+
+const server = new Horizon.Server(HORIZON_TEST, { agent: socks });
+
+const sleep = ms => new Promise(res => setTimeout(res, ms));
 
 async function waitForProxyReady(port = 3000, host = '127.0.0.1', timeout = 10000) {
   return new Promise((resolve, reject) => {
@@ -48,19 +62,6 @@ async function waitForProxyReady(port = 3000, host = '127.0.0.1', timeout = 1000
   });
 }
 
-let socks = new SocksProxyAgent('socks5h://127.0.0.1:3000');
-function createHttp() {
-  return axios.create({
-    httpAgent: socks,
-    httpsAgent: socks,
-    proxy: false,
-    timeout: 30000,
-  });
-}
-let http = createHttp();
-
-const server = new StellarSdk.Horizon.Server(HORIZON_TEST, { agent: socks });
-
 async function fundAccount(pubkey) {
   const res = await http.get(FRIEND_PREFIX + encodeURIComponent(pubkey));
   return res.data.hash;
@@ -82,12 +83,12 @@ async function waitForBalance(pubkey, min = 1) {
 
 async function createAndSubmitPayments(funder, funderKey, count = 100) {
   const account = await server.loadAccount(funder);
-  const baseSeq = account.sequence;
+  const baseSeq = BigInt(account.sequence);
   const txs = [];
 
   for (let i = 0; i < count; i++) {
     const keypair = Keypair.random();
-    const acc = new Account(funder, (BigInt(baseSeq) + BigInt(i + 1)).toString());
+    const acc = new Account(funder, (baseSeq + BigInt(i + 1)).toString());
 
     const tx = new TransactionBuilder(acc, {
       fee: BASE_FEE,
@@ -104,13 +105,21 @@ async function createAndSubmitPayments(funder, funderKey, count = 100) {
     txs.push(tx);
   }
 
-  const submitted = await Promise.allSettled(txs.map(tx => server.submitTransaction(tx)));
+  const submitted = await Promise.allSettled(
+    txs.map((tx, idx) =>
+      server.submitTransaction(tx).catch(e => {
+        console.error(`❌ TX ${idx + 1} failed:`, e.response?.data || e.message);
+        throw e;
+      })
+    )
+  );
+
   return submitted;
 }
 
 (async () => {
   try {
-    console.log('🟢 Proxy is ready.');
+    console.log('🟢 Waiting for proxy...');
     await waitForProxyReady();
 
     const funderKey = Keypair.random();
@@ -129,9 +138,8 @@ async function createAndSubmitPayments(funder, funderKey, count = 100) {
     const duration = (Date.now() - start) / 1000;
 
     const success = results.filter(r => r.status === 'fulfilled').length;
-    const failed = results.filter(r => r.status === 'rejected').length;
-
-    const tps = (success / duration).toFixed(2);
+    const failed = results.length - success;
+    const tps = +(success / duration).toFixed(2);
 
     const stats = {
       timestamp: new Date().toISOString(),
@@ -139,7 +147,7 @@ async function createAndSubmitPayments(funder, funderKey, count = 100) {
       totalSubmitted: results.length,
       totalSuccess: success,
       totalFailed: failed,
-      tps: parseFloat(tps),
+      tps,
     };
 
     console.log('=== 📊 TPS Benchmark Results ===');
