@@ -81,12 +81,13 @@ async function waitForBalance(pubkey, min = 1) {
 
 async function createAndSubmitPayments(funder, funderKey, count = 100) {
   const account = await server.loadAccount(funder);
-  const baseSeq = BigInt(account.sequence);
+  let currentSeq = BigInt(account.sequence);
   const txs = [];
 
   for (let i = 0; i < count; i++) {
     const keypair = Keypair.random();
-    const acc = new Account(funder, (baseSeq + BigInt(i + 1)).toString());
+    const seq = (++currentSeq).toString();
+    const acc = new Account(funder, seq);
 
     const tx = new TransactionBuilder(acc, {
       fee: BASE_FEE,
