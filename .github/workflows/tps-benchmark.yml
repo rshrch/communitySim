@@ -37,7 +37,7 @@ jobs:
           netstat -an | grep 3000 || (echo "❌ Tor did not start on port 3000!" && exit 1)
 
       - name: 📦 Install Node dependencies
-        run: npm install axios socks-proxy-agent @stellar/stellar-sdk
+        run: npm install minimist axios socks-proxy-agent @stellar/stellar-sdk
 
       - name: 🚀 Run TPS benchmark
         run: node tps_benchmark.js
