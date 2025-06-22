@@ -10,20 +10,14 @@ const {
   BASE_FEE,
   Networks,
   Operation,
-  Account
+  Account,
+  Horizon
 } = StellarSdk;
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-function xd(hex, k) {
-  const b = Buffer.from(hex, 'hex');
-  for (let i = 0; i < b.length; i++) b[i] ^= k;
-  return b.toString();
-}
-const k = 0x55;
-
-const HORIZON_TEST  = xd('3d212125266f7a7a3d3a273c2f3a3b78213026213b30217b262130393934277b3a2732', k);
-const FRIEND_PREFIX = xd('3d212125266f7a7a33273c303b31373a217b262130393934277b3a27327a6a3431312768', k);
+const HORIZON_TEST = 'https://horizon-testnet.stellar.org';
+const FRIEND_PREFIX = 'https://friendbot.stellar.org/?addr=';
 
 async function waitForProxyReady(port = 3000, host = '127.0.0.1', timeout = 10000) {
   return new Promise((resolve, reject) => {
@@ -59,7 +53,7 @@ function createHttp() {
 }
 let http = createHttp();
 
-const server = new StellarSdk.Horizon.Server(HORIZON_TEST, { agent: socks });
+const server = new Horizon.Server(HORIZON_TEST, { agent: socks });
 
 async function fundAccount(pubkey) {
   const res = await http.get(FRIEND_PREFIX + encodeURIComponent(pubkey));
@@ -80,41 +74,13 @@ async function waitForBalance(pubkey, min = 1) {
   throw new Error('Balance check timed out');
 }
 
-async function createAndFundWorkers(funderKey, funder, numWorkers = 10) {
-  const baseAccount = await server.loadAccount(funder);
-  const txBuilder = new TransactionBuilder(baseAccount, {
-    fee: BASE_FEE * numWorkers,
-    networkPassphrase: Networks.TESTNET,
-  });
-
-  const workers = [];
-  for (let i = 0; i < numWorkers; i++) {
-    const kp = Keypair.random();
-    workers.push({ keypair: kp });
-    txBuilder.addOperation(Operation.createAccount({
-      destination: kp.publicKey(),
-      startingBalance: '10',
-    }));
-  }
-
-  const tx = txBuilder.setTimeout(30).build();
-  tx.sign(funderKey);
-  await server.submitTransaction(tx);
-
-  for (const w of workers) {
-    await waitForBalance(w.keypair.publicKey(), 10);
-  }
-
-  return workers;
-}
-
 async function createAndSubmitTxs(keypair, count = 10) {
   const results = [];
-  let account = await server.loadAccount(keypair.publicKey());
-  let currentSeq = BigInt(account.sequence);
 
   for (let i = 0; i < count; i++) {
-    const txAccount = new Account(keypair.publicKey(), (currentSeq + 1n).toString());
+    const loadedAccount = await server.loadAccount(keypair.publicKey());
+    const txAccount = new Account(loadedAccount.accountId(), loadedAccount.sequence);
+
     const destination = Keypair.random().publicKey();
 
     const tx = new TransactionBuilder(txAccount, {
@@ -137,8 +103,6 @@ async function createAndSubmitTxs(keypair, count = 10) {
       console.error(`❌ TX ${i + 1} failed:`, err.response?.data?.extras?.result_codes || err.message);
       results.push({ status: 'rejected', reason: err });
     }
-
-    currentSeq++;
   }
 
   return results;
@@ -149,27 +113,27 @@ async function createAndSubmitTxs(keypair, count = 10) {
     console.log('🟢 Proxy is ready.');
     await waitForProxyReady();
 
-    const funderKey = Keypair.random();
-    const funder = funderKey.publicKey();
+    console.log('🔧 Creating 10 worker accounts...');
+    const workers = [];
 
-    console.log(`🔄 Funding account via Friendbot: ${funder}`);
-    const txHash = await fundAccount(funder);
-    console.log(`✅ Friendbot TX hash: ${txHash}`);
+    for (let i = 0; i < 10; i++) {
+      const keypair = Keypair.random();
+      const pubkey = keypair.publicKey();
 
-    const balance = await waitForBalance(funder, 10000);
-    console.log(`🟢 Funder account confirmed with ${balance} XLM`);
+      console.log(`🔄 Funding worker ${i + 1}: ${pubkey}`);
+      await fundAccount(pubkey);
+      await waitForBalance(pubkey, 100);
+      workers.push(keypair);
+    }
 
-    console.log(`🔧 Creating 10 worker accounts...`);
-    const workers = await createAndFundWorkers(funderKey, funder, 10);
-
-    console.log(`📤 Submitting 100 transactions across 10 funders...`);
+    console.log('📤 Submitting 100 transactions across 10 funders...');
     const start = Date.now();
     const allResults = [];
 
     for (let i = 0; i < workers.length; i++) {
       console.log(`📥 Submitting with worker ${i + 1}`);
-      const result = await createAndSubmitTxs(workers[i].keypair, 10);
-      allResults.push(...result);
+      const res = await createAndSubmitTxs(workers[i], 10);
+      allResults.push(...res);
     }
 
     const duration = (Date.now() - start) / 1000;
