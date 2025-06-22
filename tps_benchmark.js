@@ -80,27 +80,55 @@ async function waitForBalance(pubkey, min = 1) {
   throw new Error('Balance check timed out');
 }
 
-async function createAndSubmitPayments(funder, funderKey, count = 100) {
-  let account = await server.loadAccount(funder);
-  let currentSeq = BigInt(account.sequence);
+async function createAndFundWorkers(funderKey, funder, numWorkers = 10) {
+  const baseAccount = await server.loadAccount(funder);
+  const txBuilder = new TransactionBuilder(baseAccount, {
+    fee: BASE_FEE * numWorkers,
+    networkPassphrase: Networks.TESTNET,
+  });
+
+  const workers = [];
+  for (let i = 0; i < numWorkers; i++) {
+    const kp = Keypair.random();
+    workers.push({ keypair: kp });
+    txBuilder.addOperation(Operation.createAccount({
+      destination: kp.publicKey(),
+      startingBalance: '10',
+    }));
+  }
+
+  const tx = txBuilder.setTimeout(30).build();
+  tx.sign(funderKey);
+  await server.submitTransaction(tx);
+
+  for (const w of workers) {
+    await waitForBalance(w.keypair.publicKey(), 10);
+  }
+
+  return workers;
+}
+
+async function createAndSubmitTxs(keypair, count = 10) {
   const results = [];
+  let account = await server.loadAccount(keypair.publicKey());
+  let currentSeq = BigInt(account.sequence);
 
   for (let i = 0; i < count; i++) {
-    const newAccount = Keypair.random();
-    const txAccount = new Account(funder, (currentSeq + 1n).toString());
+    const txAccount = new Account(keypair.publicKey(), (currentSeq + 1n).toString());
+    const destination = Keypair.random().publicKey();
 
     const tx = new TransactionBuilder(txAccount, {
       fee: BASE_FEE,
       networkPassphrase: Networks.TESTNET,
     })
       .addOperation(Operation.createAccount({
-        destination: newAccount.publicKey(),
+        destination,
         startingBalance: '1',
       }))
       .setTimeout(30)
       .build();
 
-    tx.sign(funderKey);
+    tx.sign(keypair);
 
     try {
       const res = await server.submitTransaction(tx);
@@ -131,21 +159,28 @@ async function createAndSubmitPayments(funder, funderKey, count = 100) {
     const balance = await waitForBalance(funder, 10000);
     console.log(`🟢 Funder account confirmed with ${balance} XLM`);
 
-    console.log(`📥 Loaded funder account`);
+    console.log(`🔧 Creating 10 worker accounts...`);
+    const workers = await createAndFundWorkers(funderKey, funder, 10);
 
+    console.log(`📤 Submitting 100 transactions across 10 funders...`);
     const start = Date.now();
-    const results = await createAndSubmitPayments(funder, funderKey, 100);
+    const allResults = [];
+
+    for (let i = 0; i < workers.length; i++) {
+      console.log(`📥 Submitting with worker ${i + 1}`);
+      const result = await createAndSubmitTxs(workers[i].keypair, 10);
+      allResults.push(...result);
+    }
+
     const duration = (Date.now() - start) / 1000;
-
-    const success = results.filter(r => r.status === 'fulfilled').length;
-    const failed = results.filter(r => r.status === 'rejected').length;
-
+    const success = allResults.filter(r => r.status === 'fulfilled').length;
+    const failed = allResults.filter(r => r.status === 'rejected').length;
     const tps = (success / duration).toFixed(2);
 
     const stats = {
       timestamp: new Date().toISOString(),
       durationSeconds: duration,
-      totalSubmitted: results.length,
+      totalSubmitted: allResults.length,
       totalSuccess: success,
       totalFailed: failed,
       tps: parseFloat(tps),
